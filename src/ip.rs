@@ -2,6 +2,7 @@ use local_ip_address::list_afinet_netifas;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::net::IpAddr;
+use crate::variable::{ConfigWithName, VariableProvider};
 
 #[derive(Debug)]
 pub enum IpConfigError {
@@ -52,5 +53,29 @@ pub fn get_ip(config: &Config) -> Result<IpAddr, IpConfigError> {
             local_ip_address::local_ip()
                 .map_err(|e| IpConfigError::Lookup(e.to_string()))
         }
+    }
+}
+
+impl ConfigWithName for Config {
+    fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+    fn error(&self) -> &str {
+        &self.error
+    }
+}
+
+pub struct IpProvider;
+
+impl VariableProvider for IpProvider {
+    type Error = IpConfigError;
+    type Config = Config;
+
+    fn get_value(config: &Self::Config) -> Result<String, Self::Error> {
+        get_ip(config).map(|ip| ip.to_string())
+    }
+
+    fn section_name() -> &'static str {
+        "ip"
     }
 } 

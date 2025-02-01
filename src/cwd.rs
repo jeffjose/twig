@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
+use crate::variable::{ConfigWithName, VariableProvider};
 
 #[derive(Debug)]
 pub enum CwdError {
@@ -45,5 +46,29 @@ pub fn get_cwd(config: &Config) -> Result<String, CwdError> {
         path.to_str()
             .map(|s| s.to_string())
             .ok_or_else(|| CwdError::ToString(path.into_os_string()))
+    }
+}
+
+impl ConfigWithName for Config {
+    fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+    fn error(&self) -> &str {
+        &self.error
+    }
+}
+
+pub struct CwdProvider;
+
+impl VariableProvider for CwdProvider {
+    type Error = CwdError;
+    type Config = Config;
+
+    fn get_value(config: &Self::Config) -> Result<String, Self::Error> {
+        get_cwd(config)
+    }
+
+    fn section_name() -> &'static str {
+        "cwd"
     }
 } 
