@@ -20,7 +20,7 @@ name = "host"
 [[ip]]
 name = "local"
 # IP-specific options could go here
-# interface = "eth0" # for future use
+# interface = "eth0" 
 
 [[cwd]]
 name = "dir"
