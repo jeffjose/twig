@@ -28,6 +28,7 @@ name = "dir"
 # If true, shows only the current directory name
 # If false, shows full path
 shorten = false
+format = "x {cwd} x"
 
 [prompt]
 # Available variables with optional colors:
@@ -39,7 +40,7 @@ shorten = false
 # Multi-line format example
 format = """
 -----
--({time:cyan} {$HOST:magenta} {local:magenta} {dir:green} {$USER:yellow})-
+-({time:cyan} {$HOST:magenta} {local:magenta} ? {dir:green} ? {$USER:yellow})-
 # 
 -----
 """
