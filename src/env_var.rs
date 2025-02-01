@@ -40,7 +40,8 @@ impl VariableProvider for EnvProvider {
     type Config = Config;
 
     fn get_value(config: &Self::Config) -> Result<String, Self::Error> {
-        env::var(&config.name).map_err(|_| EnvError::NotFound(config.name.clone()))
+        let var_name = config.name.strip_prefix('$').unwrap_or(&config.name);
+        env::var(var_name).map_err(|_| EnvError::NotFound(var_name.to_string()))
     }
 
     fn section_name() -> &'static str {

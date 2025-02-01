@@ -21,7 +21,7 @@ name = "host"
 name = "local"
 # IP-specific options could go here
 # interface = "eth0" 
-error = "?"  # Optional: Used when IP lookup fails (defaults to empty string)
+error = "?" # Optional: Used when IP lookup fails (defaults to empty string)
 
 [[cwd]]
 name = "dir"

@@ -220,13 +220,17 @@ fn get_env_vars_from_format(format: &str) -> Vec<String> {
             chars.next(); // consume $
             let mut var_spec = String::new();
             while let Some(&next_char) = chars.peek() {
-                if next_char == '}' {
-                    chars.next(); // consume '}'
+                if next_char == '}' || next_char == ':' {
+                    // Add check for color separator
                     if !var_spec.is_empty() {
-                        // Use the shared parsing logic
-                        let (var_name, _) = parse_template_var(&format!("${}", var_spec));
-                        // Remove the $ prefix we just added
-                        env_vars.push(var_name[1..].to_string());
+                        env_vars.push(var_spec);
+                    }
+                    // Skip to closing brace
+                    while let Some(&c) = chars.peek() {
+                        chars.next();
+                        if c == '}' {
+                            break;
+                        }
                     }
                     break;
                 }
@@ -307,9 +311,13 @@ async fn main() {
         let format_clone = prompt_format.clone();
         tasks.push(tokio::spawn(async move {
             let mut configs = Vec::new();
-            for var_name in get_env_vars_from_format(&format_clone) {
+            let env_vars = get_env_vars_from_format(&format_clone);
+            if validate {
+                eprintln!("Found environment variables: {:?}", env_vars);
+            }
+            for var_name in env_vars {
                 configs.push(env_var::Config {
-                    name: var_name,
+                    name: format!("${}", var_name),
                     error: String::new(),
                 });
             }
