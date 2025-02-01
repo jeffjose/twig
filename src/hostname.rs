@@ -1,6 +1,6 @@
-use serde::Deserialize;
-use std::error::Error;
 use hostname;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
 
 #[derive(Debug)]
 pub enum HostnameError {
@@ -17,13 +17,14 @@ impl std::fmt::Display for HostnameError {
 
 impl Error for HostnameError {}
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Serialize, Default)]
 pub struct Config {
     // Hostname-specific config options will go here
+    pub name: Option<String>,
 }
 
 pub fn get_hostname(_config: &Config) -> Result<String, HostnameError> {
     hostname::get()
         .map_err(HostnameError::Lookup)
         .map(|os_string| os_string.to_string_lossy().into_owned())
-} 
+}

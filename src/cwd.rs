@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
@@ -20,10 +20,11 @@ impl std::fmt::Display for CwdError {
 
 impl Error for CwdError {}
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Serialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub shorten: bool,  // If true, show only the last component
+    pub name: Option<String>,  // Add name field
 }
 
 pub fn get_cwd(config: &Config) -> Result<String, CwdError> {

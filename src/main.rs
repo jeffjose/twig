@@ -1,6 +1,7 @@
 use clap::Parser;
 use directories::BaseDirs;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json;
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -40,6 +41,7 @@ enum ConfigError {
     InvalidTimeFormat(String),
     NoConfigDir,
     EmptyConfigPath,
+    MissingName(String),
 }
 
 impl fmt::Display for ConfigError {
@@ -50,6 +52,11 @@ impl fmt::Display for ConfigError {
             ConfigError::InvalidTimeFormat(fmt) => write!(f, "Invalid time format string: {}", fmt),
             ConfigError::NoConfigDir => write!(f, "Could not determine config directory"),
             ConfigError::EmptyConfigPath => write!(f, "Config path cannot be empty"),
+            ConfigError::MissingName(section) => write!(
+                f,
+                "Multiple {} sections found but not all have 'name' parameter",
+                section
+            ),
         }
     }
 }
@@ -71,15 +78,15 @@ impl From<toml::de::Error> for ConfigError {
 #[derive(Deserialize, Default)]
 struct Config {
     #[serde(default)]
-    time: TimeConfig,
+    time: Vec<TimeConfig>,
     #[serde(default)]
     prompt: PromptConfig,
     #[serde(default)]
-    hostname: HostnameConfig,
+    hostname: Vec<HostnameConfig>,
     #[serde(default)]
-    ip: IpConfig,
+    ip: Vec<IpConfig>,
     #[serde(default)]
-    cwd: CwdConfig,
+    cwd: Vec<CwdConfig>,
 }
 
 #[derive(Deserialize, Default)]
@@ -119,22 +126,55 @@ fn ensure_config_exists(config_path: &PathBuf) -> Result<(), ConfigError> {
 
     // Create default config if it doesn't exist
     if !config_path.exists() {
-        let default_config = r#"[time]
+        let default_config = r#"[[time]]
 format = "%H:%M:%S"
 
-[hostname]
+[[time]]
+name = "utc"
+format = "%H:%M:%S UTC"
+
+[[hostname]]
+name = "short"
 # Hostname-specific options could go here
 
-[ip]
+[[ip]]
+name = "local"
 # IP-specific options could go here
 
-[cwd]
+[[cwd]]
+name = "path"
 shorten = false
 
 [prompt]
-format = "[{hostname:cyan}:{cwd:blue}] {time:green}"
+format = "[{short:cyan}:{path:blue}] {time:green} ({utc:yellow})"
 "#;
         fs::write(config_path, default_config)?;
+    }
+    Ok(())
+}
+
+fn validate_section_names<T>(configs: &[T], section_name: &str) -> Result<(), ConfigError>
+where
+    T: serde::de::DeserializeOwned + Default + Serialize,
+{
+    if configs.len() > 1 {
+        // Check if any config in the section is missing a name
+        for config in configs {
+            #[derive(Deserialize)]
+            struct NamedConfig {
+                name: Option<String>,
+            }
+
+            let named: NamedConfig =
+                match serde_json::to_value(config).and_then(|v| serde_json::from_value(v)) {
+                    Ok(n) => n,
+                    Err(_) => return Err(ConfigError::MissingName(section_name.to_string())),
+                };
+
+            if named.name.is_none() {
+                return Err(ConfigError::MissingName(section_name.to_string()));
+            }
+        }
     }
     Ok(())
 }
@@ -142,13 +182,52 @@ format = "[{hostname:cyan}:{cwd:blue}] {time:green}"
 fn load_config(config_path: &PathBuf) -> Result<Config, ConfigError> {
     let content = fs::read_to_string(config_path)?;
     let config: Config = toml::from_str(&content)?;
-    validate_time_format(&config.time.format)?;
+
+    // Validate that multiple sections have names
+    validate_section_names(&config.time, "time")?;
+    validate_section_names(&config.hostname, "hostname")?;
+    validate_section_names(&config.ip, "ip")?;
+    validate_section_names(&config.cwd, "cwd")?;
+
+    validate_time_format(&config.time[0].format)?;
     Ok(config)
 }
 
 // Helper function to check if a variable is used in the format string
 fn format_uses_variable(format: &str, var_name: &str) -> bool {
     format.contains(&format!("{{{}", var_name))
+}
+
+// Helper function to get variable name for a config
+fn get_var_name<T>(config: &T, section_name: &str, index: usize) -> String
+where
+    T: serde::de::DeserializeOwned + Default + Serialize,
+{
+    #[derive(Deserialize)]
+    struct NamedConfig {
+        name: Option<String>,
+    }
+
+    // Try to deserialize just the name field
+    let named: NamedConfig =
+        match serde_json::to_value(config).and_then(|v| serde_json::from_value(v)) {
+            Ok(n) => n,
+            Err(_) => {
+                return if index == 0 {
+                    section_name.to_string()
+                } else {
+                    format!("{}_{}", section_name, index + 1)
+                }
+            }
+        };
+
+    named.name.unwrap_or_else(|| {
+        if index == 0 {
+            section_name.to_string()
+        } else {
+            format!("{}_{}", section_name, index + 1)
+        }
+    })
 }
 
 fn main() {
@@ -167,7 +246,7 @@ fn main() {
 
         // Time the time formatting
         let time_start = Instant::now();
-        let formatted_time = format_current_time(&config.time.format)?;
+        let _formatted_time = format_current_time(&config.time[0].format)?;
         let time_duration = time_start.elapsed();
 
         // Time the template formatting
@@ -176,62 +255,67 @@ fn main() {
         // Time the variable gathering
         let vars_start = Instant::now();
 
-        // Collect all strings first
-        let mut collected_strings = Vec::new();
-        collected_strings.push(formatted_time);
+        let mut variables = Vec::new();
 
-        let mut hostname_idx = None;
-        let mut ip_idx = None;
-        let mut cwd_idx = None;
-
-        if format_uses_variable(&config.prompt.format, "hostname") {
-            match hostname::get_hostname(&config.hostname) {
-                Ok(hostname) => {
-                    collected_strings.push(hostname);
-                    hostname_idx = Some(collected_strings.len() - 1);
+        // Handle time variables
+        for (i, time_config) in config.time.iter().enumerate() {
+            match format_current_time(&time_config.format) {
+                Ok(time) => {
+                    let var_name = get_var_name(time_config, "time", i);
+                    variables.push((var_name, time));
                 }
-                Err(e) => eprintln!("Warning: couldn't get hostname: {}", e),
+                Err(e) => eprintln!("Warning: couldn't format time: {}", e),
             }
         }
 
-        if format_uses_variable(&config.prompt.format, "ip") {
-            match ip::get_ip(&config.ip) {
-                Ok(ip) => {
-                    collected_strings.push(ip.to_string());
-                    ip_idx = Some(collected_strings.len() - 1);
+        // Handle hostname variables
+        for (i, hostname_config) in config.hostname.iter().enumerate() {
+            let var_name = get_var_name(hostname_config, "hostname", i);
+            if format_uses_variable(&config.prompt.format, &var_name) {
+                match hostname::get_hostname(hostname_config) {
+                    Ok(hostname) => {
+                        variables.push((var_name, hostname));
+                    }
+                    Err(e) => eprintln!("Warning: couldn't get hostname: {}", e),
                 }
-                Err(e) => eprintln!("Warning: couldn't get IP: {}", e),
             }
         }
 
-        if format_uses_variable(&config.prompt.format, "cwd") {
-            match cwd::get_cwd(&config.cwd) {
-                Ok(dir) => {
-                    collected_strings.push(dir);
-                    cwd_idx = Some(collected_strings.len() - 1);
+        // Handle IP variables
+        for (i, ip_config) in config.ip.iter().enumerate() {
+            let var_name = get_var_name(ip_config, "ip", i);
+            if format_uses_variable(&config.prompt.format, &var_name) {
+                match ip::get_ip(ip_config) {
+                    Ok(ip) => {
+                        variables.push((var_name, ip.to_string()));
+                    }
+                    Err(e) => eprintln!("Warning: couldn't get IP: {}", e),
                 }
-                Err(e) => eprintln!("Warning: couldn't get current directory: {}", e),
             }
         }
 
-        // Now build the variables vector
-        let mut variables = vec![("time", collected_strings[0].as_str())];
-
-        if let Some(idx) = hostname_idx {
-            variables.push(("hostname", collected_strings[idx].as_str()));
-        }
-
-        if let Some(idx) = ip_idx {
-            variables.push(("ip", collected_strings[idx].as_str()));
-        }
-
-        if let Some(idx) = cwd_idx {
-            variables.push(("cwd", collected_strings[idx].as_str()));
+        // Handle CWD variables
+        for (i, cwd_config) in config.cwd.iter().enumerate() {
+            let var_name = get_var_name(cwd_config, "cwd", i);
+            if format_uses_variable(&config.prompt.format, &var_name) {
+                match cwd::get_cwd(cwd_config) {
+                    Ok(dir) => {
+                        variables.push((var_name, dir));
+                    }
+                    Err(e) => eprintln!("Warning: couldn't get current directory: {}", e),
+                }
+            }
         }
 
         let vars_duration = vars_start.elapsed();
 
-        let output = format_template(&config.prompt.format, &variables, cli.timing)?;
+        // Convert variables for template formatting
+        let template_vars: Vec<(&str, &str)> = variables
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+
+        let output = format_template(&config.prompt.format, &template_vars, cli.timing)?;
         println!("{}", output);
 
         if cli.timing {

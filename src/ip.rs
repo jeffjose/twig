@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::net::IpAddr;
 use local_ip_address::local_ip;
@@ -18,9 +18,10 @@ impl std::fmt::Display for IpError {
 
 impl Error for IpError {}
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Serialize, Default)]
 pub struct Config {
     // IP-specific config options will go here
+    pub name: Option<String>,
 }
 
 pub fn get_ip(_config: &Config) -> Result<IpAddr, IpError> {

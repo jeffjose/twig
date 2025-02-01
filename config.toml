@@ -1,4 +1,4 @@
-[time]
+[[time]]
 # Basic time format (default if not specified)
 format = "%H:%M:%S"
 
@@ -12,15 +12,18 @@ format = "%H:%M:%S"
 # Compact date and time
 # time_format = "%d/%m/%y %H:%M"  # Example: 20/03/24 14:30
 
-[hostname]
+[[hostname]]
+name = "host"
 # Hostname-specific options could go here
 # format = "{}" # for future use
 
-[ip]
+[[ip]]
+name = "local"
 # IP-specific options could go here
 # interface = "eth0" # for future use
 
-[cwd]
+[[cwd]]
+name = "dir"
 # If true, shows only the current directory name
 # If false, shows full path
 shorten = false
@@ -31,7 +34,7 @@ shorten = false
 # Colors: red, green, yellow, blue, magenta, cyan, white
 #         bright_red, bright_green, bright_yellow, bright_blue,
 #         bright_magenta, bright_cyan, bright_white
-format = "-({time:cyan} {hostname:magenta} {ip:magenta} {cwd:green})-"
+format = "-({time:cyan} {host:magenta} {local:magenta} {dir:green})-"
 
 # Test different combinations of colored and non-colored variables
 # Other format examples:
@@ -43,3 +46,7 @@ format = "-({time:cyan} {hostname:magenta} {ip:magenta} {cwd:green})-"
 
 # Mixed with repeating variables:
 # format = "{hostname:cyan} [{time}] ({hostname}) {cwd:green} ({time:red})"
+
+# Examples of using named variables:
+# format = "[{host:cyan}:{dir:blue}] {time:green} ({utc:yellow})"
+# format = "{time} - {utc} - {host}"
