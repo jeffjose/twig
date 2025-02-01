@@ -27,6 +27,10 @@ struct Cli {
     /// Show timing information for each step
     #[arg(short, long)]
     timing: bool,
+
+    /// Use an alternate config file
+    #[arg(short, long)]
+    config: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -35,6 +39,7 @@ enum ConfigError {
     TomlError(toml::de::Error),
     InvalidTimeFormat(String),
     NoConfigDir,
+    EmptyConfigPath,
 }
 
 impl fmt::Display for ConfigError {
@@ -44,6 +49,7 @@ impl fmt::Display for ConfigError {
             ConfigError::TomlError(e) => write!(f, "Failed to parse config file: {}", e),
             ConfigError::InvalidTimeFormat(fmt) => write!(f, "Invalid time format string: {}", fmt),
             ConfigError::NoConfigDir => write!(f, "Could not determine config directory"),
+            ConfigError::EmptyConfigPath => write!(f, "Config path cannot be empty"),
         }
     }
 }
@@ -86,10 +92,17 @@ fn default_format() -> String {
     "{time}".to_string()
 }
 
-fn get_config_path() -> Result<PathBuf, ConfigError> {
-    BaseDirs::new()
-        .map(|base_dirs| base_dirs.config_dir().join("twig").join("config.toml"))
-        .ok_or(ConfigError::NoConfigDir)
+fn get_config_path(cli_config: &Option<PathBuf>) -> Result<PathBuf, ConfigError> {
+    if let Some(path) = cli_config {
+        if path.as_os_str().is_empty() {
+            return Err(ConfigError::EmptyConfigPath);
+        }
+        Ok(path.clone())
+    } else {
+        BaseDirs::new()
+            .map(|base_dirs| base_dirs.config_dir().join("twig").join("config.toml"))
+            .ok_or(ConfigError::NoConfigDir)
+    }
 }
 
 fn validate_time_format(format: &str) -> Result<(), ConfigError> {
@@ -98,9 +111,7 @@ fn validate_time_format(format: &str) -> Result<(), ConfigError> {
         .map_err(|_| ConfigError::InvalidTimeFormat(format.to_string()))
 }
 
-fn ensure_config_exists() -> Result<(), ConfigError> {
-    let config_path = get_config_path()?;
-
+fn ensure_config_exists(config_path: &PathBuf) -> Result<(), ConfigError> {
     // Create parent directories if they don't exist
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent)?;
@@ -128,9 +139,7 @@ format = "[{hostname:cyan}:{cwd:blue}] {time:green}"
     Ok(())
 }
 
-fn load_config() -> Result<Config, ConfigError> {
-    let config_path = get_config_path()?;
-
+fn load_config(config_path: &PathBuf) -> Result<Config, ConfigError> {
     let content = fs::read_to_string(config_path)?;
     let config: Config = toml::from_str(&content)?;
     validate_time_format(&config.time.time_format)?;
@@ -147,12 +156,13 @@ fn main() {
     let cli = Cli::parse();
 
     let result: Result<(), Box<dyn Error>> = (|| {
-        // Ensure config exists
-        ensure_config_exists()?;
+        // Get config path and ensure it exists
+        let config_path = get_config_path(&cli.config)?;
+        ensure_config_exists(&config_path)?;
 
         // Time the config loading
         let config_start = Instant::now();
-        let config = load_config()?;
+        let config = load_config(&config_path)?;
         let config_duration = config_start.elapsed();
 
         // Time the time formatting
