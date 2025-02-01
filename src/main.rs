@@ -13,7 +13,7 @@ use std::time::Instant;
 use tokio;
 
 mod time;
-use time::{format_current_time, TimeConfig};
+use time::{format_current_time, Config as TimeConfig};
 
 mod template;
 use template::{format_template, parse_template_var};
@@ -334,16 +334,16 @@ async fn main() {
                 let var_name = get_var_name(time_config, "time", i);
                 debug_variable_usage(&format_clone, "time", &var_name, validate);
                 if format_uses_variable(&format_clone, &var_name) {
-                    match format_current_time(&time_config.format) {
-                        Ok(time) => {
-                            time_vars.push((var_name, time));
-                        }
+                    let time = match format_current_time(&time_config.format) {
+                        Ok(time) => time,
                         Err(e) => {
                             if validate {
                                 eprintln!("Warning: couldn't format time: {}", e);
                             }
+                            time_config.error.clone()
                         }
-                    }
+                    };
+                    time_vars.push((var_name, time));
                 }
             }
             (time_vars, start.elapsed())
@@ -361,16 +361,16 @@ async fn main() {
                 let var_name = get_var_name(hostname_config, "hostname", i);
                 debug_variable_usage(&format_clone, "hostname", &var_name, validate_clone);
                 if format_uses_variable(&format_clone, &var_name) {
-                    match hostname::get_hostname(hostname_config) {
-                        Ok(hostname) => {
-                            hostname_vars.push((var_name, hostname));
-                        }
+                    let hostname = match hostname::get_hostname(hostname_config) {
+                        Ok(hostname) => hostname,
                         Err(e) => {
                             if validate {
                                 eprintln!("Warning: couldn't get hostname: {}", e);
                             }
+                            hostname_config.error.clone()
                         }
-                    }
+                    };
+                    hostname_vars.push((var_name, hostname));
                 }
             }
             (hostname_vars, start.elapsed())
@@ -388,16 +388,16 @@ async fn main() {
                 let var_name = get_var_name(ip_config, "ip", i);
                 debug_variable_usage(&format_clone, "ip", &var_name, validate_clone);
                 if format_uses_variable(&format_clone, &var_name) {
-                    match ip::get_ip(ip_config) {
-                        Ok(ip) => {
-                            ip_vars.push((var_name, ip.to_string()));
-                        }
+                    let ip = match ip::get_ip(ip_config) {
+                        Ok(ip) => ip.to_string(),
                         Err(e) => {
                             if validate {
                                 eprintln!("Warning: couldn't get IP: {}", e);
                             }
+                            ip_config.error.clone()
                         }
-                    }
+                    };
+                    ip_vars.push((var_name, ip));
                 }
             }
             (ip_vars, start.elapsed())
@@ -414,16 +414,16 @@ async fn main() {
                 let var_name = get_var_name(cwd_config, "cwd", i);
                 debug_variable_usage(&format_clone, "cwd", &var_name, validate);
                 if format_uses_variable(&format_clone, &var_name) {
-                    match cwd::get_cwd(cwd_config) {
-                        Ok(dir) => {
-                            cwd_vars.push((var_name, dir));
-                        }
+                    let dir = match cwd::get_cwd(cwd_config) {
+                        Ok(dir) => dir,
                         Err(e) => {
                             if validate {
                                 eprintln!("Warning: couldn't get current directory: {}", e);
                             }
+                            cwd_config.error.clone()
                         }
-                    }
+                    };
+                    cwd_vars.push((var_name, dir));
                 }
             }
             (cwd_vars, start.elapsed())
@@ -470,7 +470,7 @@ async fn main() {
         // Convert variables for template formatting
         let template_vars: Vec<(&str, &str)> = variables
             .iter()
-            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .map(|(name, value): &(String, String)| (name.as_str(), value.as_str()))
             .collect();
 
         let template_start = Instant::now();

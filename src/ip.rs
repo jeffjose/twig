@@ -25,6 +25,12 @@ pub struct Config {
     // IP-specific config options will go here
     pub name: Option<String>,
     pub interface: Option<String>,
+    #[serde(default = "default_error")]
+    pub error: String,
+}
+
+fn default_error() -> String {
+    String::new()
 }
 
 pub fn get_ip(config: &Config) -> Result<IpAddr, IpConfigError> {

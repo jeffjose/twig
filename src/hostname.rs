@@ -21,6 +21,12 @@ impl Error for HostnameError {}
 pub struct Config {
     // Hostname-specific config options will go here
     pub name: Option<String>,
+    #[serde(default = "default_error")]
+    pub error: String,
+}
+
+fn default_error() -> String {
+    String::new()
 }
 
 pub fn get_hostname(_config: &Config) -> Result<String, HostnameError> {

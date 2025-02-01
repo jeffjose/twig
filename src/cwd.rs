@@ -22,9 +22,14 @@ impl Error for CwdError {}
 
 #[derive(Deserialize, Serialize, Default)]
 pub struct Config {
-    #[serde(default)]
-    pub shorten: bool,  // If true, show only the last component
-    pub name: Option<String>,  // Add name field
+    pub name: Option<String>,
+    pub shorten: bool,
+    #[serde(default = "default_error")]
+    pub error: String,
+}
+
+fn default_error() -> String {
+    String::new()
 }
 
 pub fn get_cwd(config: &Config) -> Result<String, CwdError> {

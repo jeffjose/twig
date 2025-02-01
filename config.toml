@@ -21,6 +21,7 @@ name = "host"
 name = "local"
 # IP-specific options could go here
 # interface = "eth0" 
+error = "?"  # Optional: Used when IP lookup fails (defaults to empty string)
 
 [[cwd]]
 name = "dir"
@@ -37,8 +38,11 @@ shorten = false
 #         bright_magenta, bright_cyan, bright_white
 # Multi-line format example
 format = """
+-----
 -({time:cyan} {$HOST:magenta} {local:magenta} {dir:green} {$USER:yellow})-
-# """
+# 
+-----
+"""
 
 # Or another example:
 # format = '''
