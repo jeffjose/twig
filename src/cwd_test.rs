@@ -18,6 +18,7 @@ mod tests {
         let config = Config {
             name: Some("dir".to_string()),
             shorten: false,
+            format: "{cwd}".to_string(),
             error: String::new(),
         };
 
@@ -41,6 +42,7 @@ mod tests {
         let config = Config {
             name: Some("dir".to_string()),
             shorten: true,
+            format: "{cwd}".to_string(),
             error: String::new(),
         };
 
@@ -64,6 +66,7 @@ mod tests {
         let config = Config {
             name: Some("dir".to_string()),
             shorten: true,
+            format: "{cwd}".to_string(),
             error: String::new(),
         };
 
@@ -74,6 +77,7 @@ mod tests {
         let config = Config {
             name: Some("dir".to_string()),
             shorten: false,
+            format: "{cwd}".to_string(),
             error: String::new(),
         };
 
@@ -93,6 +97,7 @@ mod tests {
         let config = Config {
             name: Some("dir".to_string()),
             shorten: false,
+            format: "{cwd}".to_string(),
             error: "bad_dir".to_string(),
         };
 
@@ -116,6 +121,7 @@ mod tests {
         let config = Config {
             name: Some("test_dir".to_string()),
             shorten: false,
+            format: "{cwd}".to_string(),
             error: String::new(),
         };
         assert_eq!(config.name(), Some("test_dir"));
@@ -126,6 +132,7 @@ mod tests {
         let config = Config {
             name: Some("test_dir".to_string()),
             shorten: false,
+            format: "{cwd}".to_string(),
             error: "test_error".to_string(),
         };
         assert_eq!(config.error(), "test_error");
@@ -136,8 +143,62 @@ mod tests {
         let config = Config {
             name: Some("test_dir".to_string()),
             shorten: true,
+            format: "{cwd}".to_string(),
             error: String::new(),
         };
         assert!(config.shorten);
+    }
+
+    #[test]
+    fn test_format_behavior() {
+        let temp_dir = env::temp_dir().join("cwd_format_test");
+        fs::create_dir_all(&temp_dir).unwrap();
+        let original_dir = env::current_dir().unwrap();
+        
+        env::set_current_dir(&temp_dir).unwrap();
+
+        // Test with full path
+        let config = Config {
+            name: Some("dir".to_string()),
+            shorten: false,
+            format: "PWD={cwd}".to_string(),
+            error: String::new(),
+        };
+
+        let result = CwdProvider::get_value(&config).unwrap();
+        assert!(result.starts_with("PWD="));
+        assert!(!result.contains("{cwd}")); // Variable should be replaced
+        assert_eq!(result, format!("PWD={}", temp_dir.to_string_lossy()));
+
+        // Test with shortened path
+        let config = Config {
+            name: Some("dir".to_string()),
+            shorten: true,
+            format: "DIR={cwd}".to_string(),
+            error: String::new(),
+        };
+
+        let result = CwdProvider::get_value(&config).unwrap();
+        assert!(result.starts_with("DIR="));
+        assert_eq!(result, format!("DIR=cwd_format_test"));
+
+        // Clean up
+        env::set_current_dir(original_dir).unwrap();
+        fs::remove_dir(&temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_format_with_special_chars() {
+        let config = Config {
+            name: Some("dir".to_string()),
+            shorten: false,
+            format: "[[{cwd}]]".to_string(),
+            error: String::new(),
+        };
+
+        let result = CwdProvider::get_value(&config).unwrap();
+        assert!(result.starts_with("[["));
+        assert!(result.ends_with("]]"));
+        assert!(!result.contains("{cwd}"));
     }
 } 

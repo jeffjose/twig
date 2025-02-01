@@ -7,6 +7,7 @@ mod tests {
     fn test_hostname_basic() {
         let config = Config {
             name: Some("host".to_string()),
+            format: "{hostname}".to_string(),
             error: String::new(),
         };
 
@@ -22,6 +23,7 @@ mod tests {
     fn test_hostname_error_handling() {
         let config = Config {
             name: Some("host".to_string()),
+            format: "{hostname}".to_string(),
             error: "hostname_error".to_string(),
         };
 
@@ -40,6 +42,7 @@ mod tests {
     fn test_config_name() {
         let config = Config {
             name: Some("test_host".to_string()),
+            format: "{hostname}".to_string(),
             error: String::new(),
         };
         assert_eq!(config.name(), Some("test_host"));
@@ -49,6 +52,7 @@ mod tests {
     fn test_config_error() {
         let config = Config {
             name: Some("test_host".to_string()),
+            format: "{hostname}".to_string(),
             error: "test_error".to_string(),
         };
         assert_eq!(config.error(), "test_error");
@@ -58,6 +62,7 @@ mod tests {
     fn test_hostname_format() {
         let config = Config {
             name: Some("host".to_string()),
+            format: "{hostname}".to_string(),
             error: String::new(),
         };
 
@@ -78,6 +83,7 @@ mod tests {
     fn test_hostname_no_name() {
         let config = Config {
             name: None,
+            format: "{hostname}".to_string(),
             error: String::new(),
         };
 
@@ -157,5 +163,22 @@ mod tests {
 
         let result = HostnameProvider::get_value(&config).unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_format_behavior() {
+        let config = Config {
+            name: Some("host".to_string()),
+            format: "HOSTNAME={hostname}".to_string(),
+            error: String::new(),
+        };
+
+        let result = HostnameProvider::get_value(&config).unwrap();
+        assert!(result.starts_with("HOSTNAME="));
+        assert!(!result.contains("{hostname}")); // Variable should be replaced
+        
+        // Get raw hostname for comparison
+        let raw_hostname = hostname::get().unwrap().to_string_lossy().to_string();
+        assert_eq!(result, format!("HOSTNAME={}", raw_hostname));
     }
 } 

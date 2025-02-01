@@ -9,6 +9,7 @@ mod tests {
         let config = Config {
             name: Some("local".to_string()),
             interface: None,
+            format: "{ip}".to_string(),
             error: String::new(),
         };
 
@@ -30,6 +31,7 @@ mod tests {
             let config = Config {
                 name: Some("eth".to_string()),
                 interface: Some(interface_name.clone()),
+                format: "{ip}".to_string(),
                 error: String::new(),
             };
 
@@ -43,6 +45,7 @@ mod tests {
         let config = Config {
             name: Some("invalid".to_string()),
             interface: Some("nonexistent0".to_string()),
+            format: "{ip}".to_string(),
             error: "not_found".to_string(),
         };
 
@@ -61,6 +64,7 @@ mod tests {
         let config = Config {
             name: Some("test_ip".to_string()),
             interface: None,
+            format: "{ip}".to_string(),
             error: String::new(),
         };
         assert_eq!(config.name(), Some("test_ip"));
@@ -71,6 +75,7 @@ mod tests {
         let config = Config {
             name: Some("test_ip".to_string()),
             interface: None,
+            format: "{ip}".to_string(),
             error: "test_error".to_string(),
         };
         assert_eq!(config.error(), "test_error");
@@ -90,6 +95,7 @@ mod tests {
         let config = Config {
             name: Some("ip".to_string()),
             interface: None,
+            format: "{ip}".to_string(),
             error: String::new(),
         };
 
@@ -111,10 +117,47 @@ mod tests {
         let config = Config {
             name: None,
             interface: None,
+            format: "{ip}".to_string(),
             error: String::new(),
         };
 
         let result = IpProvider::get_value(&config);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_format_behavior() {
+        let config = Config {
+            name: Some("local".to_string()),
+            interface: None,
+            format: "IP={ip}".to_string(),
+            error: String::new(),
+        };
+
+        let result = IpProvider::get_value(&config).unwrap();
+        assert!(result.starts_with("IP="));
+        assert!(!result.contains("{ip}")); // Variable should be replaced
+        
+        // Get raw IP for comparison
+        let raw_ip = local_ip_address::local_ip().unwrap();
+        assert_eq!(result, format!("IP={}", raw_ip));
+    }
+
+    #[test]
+    fn test_format_with_interface() {
+        // First get a valid interface name
+        let interfaces = local_ip_address::list_afinet_netifas().unwrap();
+        if let Some((interface_name, expected_ip)) = interfaces.first() {
+            let config = Config {
+                name: Some("eth".to_string()),
+                interface: Some(interface_name.clone()),
+                format: "NET={ip}".to_string(),
+                error: String::new(),
+            };
+
+            let result = IpProvider::get_value(&config).unwrap();
+            assert!(result.starts_with("NET="));
+            assert_eq!(result, format!("NET={}", expected_ip));
+        }
     }
 } 
