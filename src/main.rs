@@ -40,6 +40,8 @@ mod hostname_test;
 
 mod ip_test;
 
+mod time_test;
+
 #[derive(Parser)]
 #[command(version, about = "A configurable time display utility")]
 struct Cli {
