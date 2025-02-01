@@ -1,8 +1,9 @@
+use crate::variable::{ConfigWithName, VariableProvider};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
-use crate::variable::{ConfigWithName, VariableProvider};
 
 #[derive(Debug)]
 pub enum CwdError {
@@ -24,7 +25,6 @@ impl Error for CwdError {}
 #[derive(Deserialize, Serialize, Default)]
 pub struct Config {
     pub name: Option<String>,
-    pub shorten: bool,
     #[serde(default = "default_format")]
     pub format: String,
     #[serde(default = "default_error")]
@@ -32,28 +32,51 @@ pub struct Config {
 }
 
 fn default_format() -> String {
-    "{cwd}".to_string()  // Default format using {cwd} variable
+    "{cwd}".to_string()
 }
 
 fn default_error() -> String {
     String::new()
 }
 
+// Helper function to get all available variables for the current path
+fn get_cwd_variables(path: &std::path::Path) -> Result<HashMap<String, String>, CwdError> {
+    let mut vars = HashMap::new();
+
+    // Full path
+    let full_path = path
+        .to_str()
+        .map(String::from)
+        .ok_or_else(|| CwdError::ToString(path.to_path_buf().into_os_string()))?;
+    vars.insert("cwd".to_string(), full_path);
+
+    // Short version (current directory name)
+    let short_path = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(String::from)
+        .unwrap_or_else(|| ".".to_string());
+    vars.insert("cwd_short".to_string(), short_path);
+
+    // Future variables can be added here:
+    // vars.insert("cwd_parent".to_string(), ...);
+    // vars.insert("cwd_home_relative".to_string(), ...);
+    // vars.insert("cwd_git_root".to_string(), ...);
+
+    Ok(vars)
+}
+
 pub fn get_cwd(config: &Config) -> Result<String, CwdError> {
     let path = env::current_dir().map_err(CwdError::GetCwd)?;
-    
-    let raw_cwd = if config.shorten {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| String::from("."))
-    } else {
-        path.to_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| CwdError::ToString(path.into_os_string()))?
-    };
+    let vars = get_cwd_variables(&path)?;
 
-    Ok(config.format.replace("{cwd}", &raw_cwd))
+    // Replace all variables in the format string
+    let mut result = config.format.clone();
+    for (var_name, value) in vars {
+        result = result.replace(&format!("{{{}}}", var_name), &value);
+    }
+
+    Ok(result)
 }
 
 impl ConfigWithName for Config {
@@ -78,4 +101,4 @@ impl VariableProvider for CwdProvider {
     fn section_name() -> &'static str {
         "cwd"
     }
-} 
+}
