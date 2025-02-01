@@ -87,7 +87,7 @@ fn apply_color(
     }
 }
 
-fn validate_variables(template: &str, variables: &[(&str, &str)]) -> Result<(), TemplateError> {
+fn validate_variables(template: &str, _variables: &[(&str, &str)]) -> Result<(), TemplateError> {
     // Only validate syntax (unclosed braces)
     let mut pos = 0;
     while let Some(start) = template[pos..].find('{') {
@@ -160,16 +160,48 @@ fn process_variables(
 
 pub fn format_template(
     template: &str,
-    variables: &[(&str, &str)],
-    show_warnings: bool,
+    vars: &[(&str, &str)],
+    validate: bool,
     mode: Option<&str>,
-) -> Result<String, TemplateError> {
+) -> Result<String, Box<dyn Error>> {
+    let mut result = String::with_capacity(template.len());
+    let mut chars = template.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            let mut var_spec = String::new();
+            while let Some(&next_char) = chars.peek() {
+                if next_char == '}' {
+                    chars.next();
+                    if !var_spec.is_empty() {
+                        let (var_name, color) = parse_template_var(&var_spec);
+
+                        // Find the variable value
+                        if let Some((_, value)) = vars.iter().find(|(name, _)| *name == var_name) {
+                            let formatted = match color {
+                                Some(color_name) => apply_color(value, &color_name, validate, mode),
+                                None => Ok(value.to_string()),
+                            }?;
+                            result.push_str(&formatted);
+                        } else if validate {
+                            eprintln!("Warning: variable '{}' not found", var_name);
+                        }
+                    }
+                    break;
+                }
+                var_spec.push(chars.next().unwrap());
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
     // Validate variables first
-    validate_variables(template, variables)?;
+    validate_variables(template, vars)?;
 
     if mode == Some("tcsh") {
         // Process variables
-        let result = process_variables(template, variables, show_warnings, mode)?;
+        let result = process_variables(template, vars, validate, mode)?;
 
         // Convert newlines to literal "\n" for tcsh mode
         let mut final_result = String::new();
@@ -187,7 +219,7 @@ pub fn format_template(
         let mut result_lines = Vec::with_capacity(lines.len());
 
         for line in lines {
-            let processed = process_variables(line, variables, show_warnings, mode)?;
+            let processed = process_variables(line, vars, validate, mode)?;
             result_lines.push(processed);
         }
 
@@ -197,5 +229,28 @@ pub fn format_template(
             .filter(|line| !line.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n"))
+    }
+}
+
+// Fix the split_var_and_color function
+pub fn split_var_and_color(var_spec: &str) -> (&str, Option<&str>) {
+    if let Some(colon_pos) = var_spec.find(':') {
+        let (var, color) = var_spec.split_at(colon_pos);
+        // Skip the colon
+        (var, Some(&color[1..]))
+    } else {
+        (var_spec, None)
+    }
+}
+
+pub fn parse_template_var(var: &str) -> (String, Option<String>) {
+    if var.starts_with('$') {
+        // For environment variables
+        let (name, color) = split_var_and_color(&var[1..]); // Skip the $ prefix
+        (format!("${}", name), color.map(String::from))
+    } else {
+        // For regular variables
+        let (name, color) = split_var_and_color(var);
+        (name.to_string(), color.map(String::from))
     }
 }

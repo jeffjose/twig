@@ -1,4 +1,4 @@
-use local_ip_address::{list_afinet_netifas, Error as IpError};
+use local_ip_address::list_afinet_netifas;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::net::IpAddr;

@@ -16,7 +16,7 @@ mod time;
 use time::{format_current_time, TimeConfig};
 
 mod template;
-use template::format_template;
+use template::{format_template, parse_template_var};
 
 mod hostname;
 mod ip;
@@ -251,27 +251,19 @@ fn get_env_vars_from_format(format: &str) -> Vec<String> {
     while let Some(c) = chars.next() {
         if c == '{' && chars.peek() == Some(&'$') {
             chars.next(); // consume $
-            let mut var_name = String::new();
+            let mut var_spec = String::new();
             while let Some(&next_char) = chars.peek() {
-                if next_char == '}' || next_char == ':' {
-                    // If we hit a color specification or end, stop collecting the var name
-                    if next_char == ':' {
-                        // Skip over the color specification until we find '}'
-                        while let Some(&c) = chars.peek() {
-                            chars.next();
-                            if c == '}' {
-                                break;
-                            }
-                        }
-                    } else {
-                        chars.next(); // consume the '}'
-                    }
-                    if !var_name.is_empty() {
-                        env_vars.push(var_name);
+                if next_char == '}' {
+                    chars.next(); // consume '}'
+                    if !var_spec.is_empty() {
+                        // Use the shared parsing logic
+                        let (var_name, _) = parse_template_var(&format!("${}", var_spec));
+                        // Remove the $ prefix we just added
+                        env_vars.push(var_name[1..].to_string());
                     }
                     break;
                 }
-                var_name.push(chars.next().unwrap());
+                var_spec.push(chars.next().unwrap());
             }
         }
     }
