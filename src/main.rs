@@ -38,6 +38,10 @@ struct Cli {
     /// Output mode (e.g. 'tcsh')
     #[arg(long)]
     mode: Option<String>,
+
+    /// Show validation errors and warnings
+    #[arg(long)]
+    validate: bool,
 }
 
 #[derive(Debug)]
@@ -270,7 +274,11 @@ fn main() {
                     let var_name = get_var_name(time_config, "time", i);
                     variables.push((var_name, time));
                 }
-                Err(e) => eprintln!("Warning: couldn't format time: {}", e),
+                Err(e) => {
+                    if cli.validate {
+                        eprintln!("Warning: couldn't format time: {}", e);
+                    }
+                }
             }
         }
 
@@ -282,7 +290,11 @@ fn main() {
                     Ok(hostname) => {
                         variables.push((var_name, hostname));
                     }
-                    Err(e) => eprintln!("Warning: couldn't get hostname: {}", e),
+                    Err(e) => {
+                        if cli.validate {
+                            eprintln!("Warning: couldn't get hostname: {}", e);
+                        }
+                    }
                 }
             }
         }
@@ -295,7 +307,11 @@ fn main() {
                     Ok(ip) => {
                         variables.push((var_name, ip.to_string()));
                     }
-                    Err(e) => eprintln!("Warning: couldn't get IP: {}", e),
+                    Err(e) => {
+                        if cli.validate {
+                            eprintln!("Warning: couldn't get IP: {}", e);
+                        }
+                    }
                 }
             }
         }
@@ -308,7 +324,11 @@ fn main() {
                     Ok(dir) => {
                         variables.push((var_name, dir));
                     }
-                    Err(e) => eprintln!("Warning: couldn't get current directory: {}", e),
+                    Err(e) => {
+                        if cli.validate {
+                            eprintln!("Warning: couldn't get current directory: {}", e);
+                        }
+                    }
                 }
             }
         }
@@ -324,7 +344,7 @@ fn main() {
         let output = format_template(
             &config.prompt.format,
             &template_vars,
-            cli.timing,
+            cli.validate,
             cli.mode.as_deref(),
         )?;
         println!("{}", output);
@@ -342,7 +362,9 @@ fn main() {
     })();
 
     if let Err(e) = result {
-        eprintln!("Error: {}", e);
+        if cli.validate {
+            eprintln!("Error: {}", e);
+        }
         std::process::exit(1);
     }
 }

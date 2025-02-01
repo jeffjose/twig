@@ -88,18 +88,12 @@ fn apply_color(
 }
 
 fn validate_variables(template: &str, variables: &[(&str, &str)]) -> Result<(), TemplateError> {
+    // Only validate syntax (unclosed braces)
     let mut pos = 0;
     while let Some(start) = template[pos..].find('{') {
         let start = start + pos;
         if let Some(end) = template[start..].find('}') {
-            let end = end + start;
-            let var_spec = &template[start + 1..end];
-            let var_name = var_spec.split(':').next().unwrap_or(var_spec);
-
-            if !variables.iter().any(|(name, _)| *name == var_name) {
-                return Err(TemplateError::MissingVariable(var_name.to_string()));
-            }
-            pos = end + 1;
+            pos = start + end + 1;
         } else {
             return Err(TemplateError::InvalidSyntax("Unclosed variable".into()));
         }
@@ -138,6 +132,26 @@ fn process_variables(
         let pattern = format!("{{{}}}", name);
         while result.contains(&pattern) {
             result = result.replace(&pattern, value);
+        }
+    }
+
+    // Handle any remaining unmatched variables by keeping them as-is
+    let mut pos = 0;
+    while let Some(start) = result[pos..].find('{') {
+        let start = start + pos;
+        if let Some(end) = result[start..].find('}') {
+            let end = end + start;
+            let var_spec = &result[start..=end];
+            let var_name = var_spec[1..end - start].split(':').next().unwrap_or("");
+
+            if show_warnings {
+                eprintln!("Warning: undefined variable '{}'", var_name);
+            }
+
+            // Instead of replacing with empty string, just advance the position
+            pos = end + 1;
+        } else {
+            pos = start + 1;
         }
     }
 
