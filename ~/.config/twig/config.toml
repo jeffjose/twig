@@ -10,4 +10,7 @@ time_format = "%H:%M:%S"
 # time_format = "%A, %B %d, %Y at %H:%M:%S"  # Example: Wednesday, March 20, 2024 at 14:30:45
 
 # Compact date and time
-# time_format = "%d/%m/%y %H:%M"  # Example: 20/03/24 14:30 
+# time_format = "%d/%m/%y %H:%M"  # Example: 20/03/24 14:30
+
+[prompt]
+format = "foo: {time}"

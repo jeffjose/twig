@@ -8,6 +8,9 @@ use std::path::PathBuf;
 mod time;
 use time::{format_current_time, TimeConfig};
 
+mod template;
+use template::{format_template, TemplateError};
+
 #[derive(Debug)]
 enum ConfigError {
     IoError(std::io::Error),
@@ -45,6 +48,18 @@ impl From<toml::de::Error> for ConfigError {
 struct Config {
     #[serde(default)]
     time: TimeConfig,
+    #[serde(default)]
+    prompt: PromptConfig,
+}
+
+#[derive(Deserialize, Default)]
+struct PromptConfig {
+    #[serde(default = "default_format")]
+    format: String,
+}
+
+fn default_format() -> String {
+    "{time}".to_string()
 }
 
 fn get_config_path() -> Result<PathBuf, ConfigError> {
@@ -77,7 +92,16 @@ fn load_config() -> Result<Config, ConfigError> {
 fn main() {
     match load_config() {
         Ok(config) => match format_current_time(&config.time.time_format) {
-            Ok(formatted_time) => println!("Current time: {}", formatted_time),
+            Ok(formatted_time) => {
+                let variables = [("time", formatted_time.as_str())];
+                match format_template(&config.prompt.format, &variables) {
+                    Ok(output) => println!("{}", output),
+                    Err(e) => {
+                        eprintln!("Template error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
             Err(e) => {
                 eprintln!("Error formatting time: {}", e);
                 std::process::exit(1);
