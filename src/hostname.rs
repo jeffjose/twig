@@ -2,16 +2,24 @@ use hostname;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use crate::variable::{ConfigWithName, VariableProvider};
+use std::collections::HashMap;
+use std::net::IpAddr;
+use local_ip_address::local_ip;
+use std::process::Command;
 
 #[derive(Debug)]
 pub enum HostnameError {
     Lookup(std::io::Error),
+    DnsLookup(std::io::Error),
+    CommandFailed(std::io::Error),
 }
 
 impl std::fmt::Display for HostnameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HostnameError::Lookup(e) => write!(f, "Failed to get hostname: {}", e),
+            HostnameError::DnsLookup(e) => write!(f, "Failed to get FQDN: {}", e),
+            HostnameError::CommandFailed(e) => write!(f, "Hostname command failed: {}", e),
         }
     }
 }
@@ -36,14 +44,45 @@ fn default_error() -> String {
     String::new()
 }
 
+fn get_hostname_variables() -> Result<HashMap<String, String>, HostnameError> {
+    let mut vars = HashMap::new();
+
+    // Get basic hostname
+    let hostname = hostname::get()
+        .map_err(HostnameError::Lookup)?
+        .to_string_lossy()
+        .into_owned();
+    vars.insert("hostname".to_string(), hostname.clone());
+
+    // Get FQDN using hostname -f command
+    let fqdn = Command::new("hostname")
+        .arg("-f")
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| hostname.clone());
+    vars.insert("fqdn".to_string(), fqdn);
+
+    Ok(vars)
+}
+
 pub fn get_hostname(config: &Config) -> Result<String, HostnameError> {
-    // First get the raw hostname
-    let raw_hostname = hostname::get()
-        .map_err(HostnameError::Lookup)
-        .map(|os_string| os_string.to_string_lossy().into_owned())?;
+    let vars = get_hostname_variables()?;
     
-    // Replace {hostname} in the format string with the actual hostname
-    Ok(config.format.replace("{hostname}", &raw_hostname))
+    // Replace all variables in the format string
+    let mut result = config.format.clone();
+    for (var_name, value) in vars {
+        result = result.replace(&format!("{{{}}}", var_name), &value);
+    }
+    
+    Ok(result)
 }
 
 impl ConfigWithName for Config {

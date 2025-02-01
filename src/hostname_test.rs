@@ -181,4 +181,29 @@ mod tests {
         let raw_hostname = hostname::get().unwrap().to_string_lossy().to_string();
         assert_eq!(result, format!("HOSTNAME={}", raw_hostname));
     }
+
+    #[test]
+    fn test_hostname_variables() {
+        let result = get_hostname_variables().unwrap();
+        
+        // Basic hostname should exist
+        assert!(result.contains_key("hostname"));
+        assert!(!result.get("hostname").unwrap().is_empty());
+        
+        // FQDN should exist
+        assert!(result.contains_key("fqdn"));
+        assert!(!result.get("fqdn").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_hostname_format() {
+        let config = Config {
+            format: "HOST={hostname} FQDN={fqdn}".to_string(),
+            ..Default::default()
+        };
+        
+        let result = get_hostname(&config).unwrap();
+        assert!(result.starts_with("HOST="));
+        assert!(result.contains("FQDN="));
+    }
 } 

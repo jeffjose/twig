@@ -14,6 +14,9 @@ format = "%H:%M:%S"
 
 [[hostname]]
 # Hostname-specific options could go here
+# Available variables:
+# {hostname} - Basic hostname
+# {fqdn} - Fully Qualified Domain Name (if available)
 format = "HOSTNAME={hostname}" # for future use
 
 [[ip]]
@@ -40,7 +43,7 @@ name = "dir"
 # Multi-line format example
 format = """
 -----
--({time:cyan} {$HOST:magenta} {local:magenta} {dir:green} {$USER:yellow})-
+-({time:cyan} {$HOST:magenta} {hostname:magenta} {local:magenta} {dir:green} {$USER:yellow})-
 # 
 -----
 """
