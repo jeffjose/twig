@@ -221,7 +221,7 @@ fn main() {
 
         let vars_duration = vars_start.elapsed();
 
-        let output = format_template(&config.prompt.format, &variables)?;
+        let output = format_template(&config.prompt.format, &variables, cli.timing)?;
         println!("{}", output);
 
         if cli.timing {

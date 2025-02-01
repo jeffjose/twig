@@ -18,7 +18,7 @@ impl std::fmt::Display for TemplateError {
 
 impl Error for TemplateError {}
 
-fn apply_color(text: &str, color: &str) -> Result<String, TemplateError> {
+fn apply_color(text: &str, color: &str, show_warnings: bool) -> Result<String, TemplateError> {
     let result = match color {
         "red" => text.red().to_string(),
         "green" => text.green().to_string(),
@@ -35,53 +35,63 @@ fn apply_color(text: &str, color: &str) -> Result<String, TemplateError> {
         "bright_cyan" => text.bright_cyan().to_string(),
         "bright_white" => text.bright_white().to_string(),
         unknown => {
-            eprintln!("Warning: unknown color '{}', using white instead", unknown);
+            if show_warnings {
+                eprintln!("Warning: unknown color '{}', using white instead", unknown);
+            }
             text.white().to_string()
         }
     };
     Ok(result)
 }
 
-pub fn format_template(template: &str, variables: &[(&str, &str)]) -> Result<String, TemplateError> {
+pub fn format_template(template: &str, variables: &[(&str, &str)], show_warnings: bool) -> Result<String, TemplateError> {
     let mut result = template.to_string();
     
-    for (name, value) in variables {
-        // Look for both colored and non-colored variables
-        let var_patterns = [
-            format!("{{{}}}", name),  // Simple {var}
-            format!("{{{}:", name),   // Start of {var:color}
-        ];
+    // First, validate that all variables in the template are provided
+    let mut pos = 0;
+    while let Some(start) = result[pos..].find('{') {
+        let start = start + pos;
+        if let Some(end) = result[start..].find('}') {
+            let end = end + start;
+            let var_spec = &result[start + 1..end];
+            let var_name = if let Some(colon) = var_spec.find(':') {
+                &var_spec[..colon]
+            } else {
+                var_spec
+            };
+            
+            if !variables.iter().any(|(name, _)| *name == var_name) {
+                return Err(TemplateError::MissingVariable(var_name.to_string()));
+            }
+            pos = end + 1;
+        } else {
+            return Err(TemplateError::InvalidSyntax("Unclosed variable".into()));
+        }
+    }
 
-        for pattern in var_patterns {
-            while let Some(start) = result.find(&pattern) {
-                let after_var = start + pattern.len();
-                
-                // Check if this is a color variant
-                if pattern.ends_with(':') {
-                    // Find the end of the color specification
-                    if let Some(end) = result[after_var..].find('}') {
-                        let color = &result[after_var..after_var + end];
-                        let colored_value = apply_color(value, color)?;
-                        result.replace_range(start..after_var + end + 1, &colored_value);
-                    } else {
-                        return Err(TemplateError::InvalidSyntax("Unclosed color specification".into()));
-                    }
-                } else {
-                    // Simple replacement
-                    result.replace_range(start..after_var + 1, value);
-                }
+    // Process colored variables first
+    for (name, value) in variables {
+        let pattern = format!("{{{}:", name);
+        let mut position = 0;
+        while let Some(start) = result[position..].find(&pattern) {
+            let start = start + position;
+            let after_var = start + pattern.len();
+            
+            if let Some(end) = result[after_var..].find('}') {
+                let end = end + after_var;
+                let color = &result[after_var..end];
+                let colored_value = apply_color(value, color, show_warnings)?;
+                result.replace_range(start..end + 1, &colored_value);
+                position = start + colored_value.len();
             }
         }
     }
 
-    // Check for any remaining {...} patterns
-    if let Some(start) = result.find('{') {
-        if let Some(end) = result[start..].find('}') {
-            let var_spec = &result[start + 1..start + end];
-            if let Some(colon) = var_spec.find(':') {
-                return Err(TemplateError::MissingVariable(var_spec[..colon].to_string()));
-            }
-            return Err(TemplateError::MissingVariable(var_spec.to_string()));
+    // Then process non-colored variables
+    for (name, value) in variables {
+        let pattern = format!("{{{}}}", name);
+        while result.contains(&pattern) {
+            result = result.replace(&pattern, value);
         }
     }
     

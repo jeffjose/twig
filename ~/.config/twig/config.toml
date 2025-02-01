@@ -31,8 +31,15 @@ shorten = false
 # Colors: red, green, yellow, blue, magenta, cyan, white
 #         bright_red, bright_green, bright_yellow, bright_blue, 
 #         bright_magenta, bright_cyan, bright_white
-format = "-({time:cyan} {hostname:magenta} {ip:magenta} {cwd:green})-"
+format = "-({time:cyan} {hostname} {ip:magenta} {cwd:green})-"
 
-# Some other examples:
-# format = "{time:bright_green} on {hostname:bright_blue}"
-# format = "[{cwd:yellow}] {hostname:cyan} ({ip:magenta}) at {time:green}"
+# Test different combinations of colored and non-colored variables
+# Other format examples:
+# All colored:
+# format = "-({time:cyan} {hostname:blue} {ip:magenta} {cwd:green})-"
+
+# All non-colored:
+# format = "-({time} {hostname} {ip} {cwd})-"
+
+# Mixed with repeating variables:
+# format = "{hostname:cyan} [{time}] ({hostname}) {cwd:green} ({time:red})"
