@@ -87,139 +87,101 @@ fn apply_color(
     }
 }
 
+fn validate_variables(template: &str, variables: &[(&str, &str)]) -> Result<(), TemplateError> {
+    let mut pos = 0;
+    while let Some(start) = template[pos..].find('{') {
+        let start = start + pos;
+        if let Some(end) = template[start..].find('}') {
+            let end = end + start;
+            let var_spec = &template[start + 1..end];
+            let var_name = var_spec.split(':').next().unwrap_or(var_spec);
+
+            if !variables.iter().any(|(name, _)| *name == var_name) {
+                return Err(TemplateError::MissingVariable(var_name.to_string()));
+            }
+            pos = end + 1;
+        } else {
+            return Err(TemplateError::InvalidSyntax("Unclosed variable".into()));
+        }
+    }
+    Ok(())
+}
+
+fn process_variables(
+    template: &str,
+    variables: &[(&str, &str)],
+    show_warnings: bool,
+    mode: Option<&str>,
+) -> Result<String, TemplateError> {
+    let mut result = template.to_string();
+
+    // Process colored variables first
+    for (name, value) in variables {
+        let pattern = format!("{{{}:", name);
+        let mut position = 0;
+        while let Some(start) = result[position..].find(&pattern) {
+            let start = start + position;
+            let after_var = start + pattern.len();
+
+            if let Some(end) = result[after_var..].find('}') {
+                let end = end + after_var;
+                let color = &result[after_var..end];
+                let colored_value = apply_color(value, color, show_warnings, mode)?;
+                result.replace_range(start..end + 1, &colored_value);
+                position = start + colored_value.len();
+            }
+        }
+    }
+
+    // Then process non-colored variables
+    for (name, value) in variables {
+        let pattern = format!("{{{}}}", name);
+        while result.contains(&pattern) {
+            result = result.replace(&pattern, value);
+        }
+    }
+
+    Ok(result)
+}
+
 pub fn format_template(
     template: &str,
     variables: &[(&str, &str)],
     show_warnings: bool,
     mode: Option<&str>,
 ) -> Result<String, TemplateError> {
-    // For tcsh mode, process the entire template as one string
+    // Validate variables first
+    validate_variables(template, variables)?;
+
     if mode == Some("tcsh") {
-        let mut result = template.to_string();
+        // Process variables
+        let result = process_variables(template, variables, show_warnings, mode)?;
 
-        // First, validate all variables in the template
-        let mut pos = 0;
-        while let Some(start) = result[pos..].find('{') {
-            let start = start + pos;
-            if let Some(end) = result[start..].find('}') {
-                let end = end + start;
-                let var_spec = &result[start + 1..end];
-                let var_name = if let Some(colon) = var_spec.find(':') {
-                    &var_spec[..colon]
-                } else {
-                    var_spec
-                };
-
-                if !variables.iter().any(|(name, _)| *name == var_name) {
-                    return Err(TemplateError::MissingVariable(var_name.to_string()));
-                }
-                pos = end + 1;
-            } else {
-                return Err(TemplateError::InvalidSyntax("Unclosed variable".into()));
-            }
-        }
-
-        // Process colored variables first
-        for (name, value) in variables {
-            let pattern = format!("{{{}:", name);
-            let mut position = 0;
-            while let Some(start) = result[position..].find(&pattern) {
-                let start = start + position;
-                let after_var = start + pattern.len();
-
-                if let Some(end) = result[after_var..].find('}') {
-                    let end = end + after_var;
-                    let color = &result[after_var..end];
-                    let colored_value = apply_color(value, color, show_warnings, Some("tcsh"))?;
-                    result.replace_range(start..end + 1, &colored_value);
-                    position = start + colored_value.len();
-                }
-            }
-        }
-
-        // Then process non-colored variables
-        for (name, value) in variables {
-            let pattern = format!("{{{}}}", name);
-            while result.contains(&pattern) {
-                result = result.replace(&pattern, value);
-            }
-        }
-
-        // Replace actual newlines with literal "\n"
+        // Convert newlines to literal "\n" for tcsh mode
         let mut final_result = String::new();
-        let mut chars = result.chars().peekable();
-
-        while let Some(ch) = chars.next() {
+        for ch in result.chars() {
             if ch == '\n' {
                 final_result.push_str("\\n");
             } else {
                 final_result.push(ch);
             }
         }
-
         Ok(final_result)
     } else {
-        // Original code for non-tcsh mode
+        // For non-tcsh mode, process line by line
         let lines: Vec<&str> = template.lines().collect();
         let mut result_lines = Vec::with_capacity(lines.len());
 
         for line in lines {
-            let mut result = line.to_string();
-
-            // First, validate that all variables in the template are provided
-            let mut pos = 0;
-            while let Some(start) = result[pos..].find('{') {
-                let start = start + pos;
-                if let Some(end) = result[start..].find('}') {
-                    let end = end + start;
-                    let var_spec = &result[start + 1..end];
-                    let var_name = if let Some(colon) = var_spec.find(':') {
-                        &var_spec[..colon]
-                    } else {
-                        var_spec
-                    };
-
-                    if !variables.iter().any(|(name, _)| *name == var_name) {
-                        return Err(TemplateError::MissingVariable(var_name.to_string()));
-                    }
-                    pos = end + 1;
-                } else {
-                    return Err(TemplateError::InvalidSyntax("Unclosed variable".into()));
-                }
-            }
-
-            // Process colored variables first
-            for (name, value) in variables {
-                let pattern = format!("{{{}:", name);
-                let mut position = 0;
-                while let Some(start) = result[position..].find(&pattern) {
-                    let start = start + position;
-                    let after_var = start + pattern.len();
-
-                    if let Some(end) = result[after_var..].find('}') {
-                        let end = end + after_var;
-                        let color = &result[after_var..end];
-                        let colored_value = apply_color(value, color, show_warnings, mode)?;
-                        result.replace_range(start..end + 1, &colored_value);
-                        position = start + colored_value.len();
-                    }
-                }
-            }
-
-            result_lines.push(result);
+            let processed = process_variables(line, variables, show_warnings, mode)?;
+            result_lines.push(processed);
         }
 
-        // For tcsh mode, preserve literal newlines
-        match mode {
-            Some("tcsh") => Ok(result_lines.join("\n")),
-            _ => {
-                // For other modes, filter out empty lines and join
-                Ok(result_lines
-                    .into_iter()
-                    .filter(|line| !line.trim().is_empty())
-                    .collect::<Vec<_>>()
-                    .join("\n"))
-            }
-        }
+        // Filter empty lines in non-tcsh mode
+        Ok(result_lines
+            .into_iter()
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"))
     }
 }
