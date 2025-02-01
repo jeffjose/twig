@@ -15,7 +15,7 @@ mod time;
 use time::{format_current_time, Config as TimeConfig};
 
 mod template;
-use template::{format_template, parse_template_var};
+use template::format_template;
 
 mod hostname;
 mod ip;
@@ -31,6 +31,8 @@ mod variable;
 use variable::{process_section, ProcessingResult};
 
 mod env_var;
+
+mod env_var_test;
 
 #[derive(Parser)]
 #[command(version, about = "A configurable time display utility")]
