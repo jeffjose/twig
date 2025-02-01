@@ -1,10 +1,11 @@
 use chrono::{Local, format::ParseError};
 use serde::Deserialize;
+use std::error::Error;
 
 #[derive(Deserialize, Default)]
 pub struct TimeConfig {
     #[serde(default = "default_time_format")]
-    pub time_format: String,
+    pub format: String,
 }
 
 fn default_time_format() -> String {

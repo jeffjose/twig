@@ -120,7 +120,7 @@ fn ensure_config_exists(config_path: &PathBuf) -> Result<(), ConfigError> {
     // Create default config if it doesn't exist
     if !config_path.exists() {
         let default_config = r#"[time]
-time_format = "%H:%M:%S"
+format = "%H:%M:%S"
 
 [hostname]
 # Hostname-specific options could go here
@@ -142,7 +142,7 @@ format = "[{hostname:cyan}:{cwd:blue}] {time:green}"
 fn load_config(config_path: &PathBuf) -> Result<Config, ConfigError> {
     let content = fs::read_to_string(config_path)?;
     let config: Config = toml::from_str(&content)?;
-    validate_time_format(&config.time.time_format)?;
+    validate_time_format(&config.time.format)?;
     Ok(config)
 }
 
@@ -167,7 +167,7 @@ fn main() {
 
         // Time the time formatting
         let time_start = Instant::now();
-        let formatted_time = format_current_time(&config.time.time_format)?;
+        let formatted_time = format_current_time(&config.time.format)?;
         let time_duration = time_start.elapsed();
 
         // Time the template formatting

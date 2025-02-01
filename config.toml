@@ -1,6 +1,6 @@
 [time]
 # Basic time format (default if not specified)
-time_format = "%H:%M:%S"
+format = "%H:%M:%S"
 
 # Or you can use these alternative formats:
 # Full date and time with 12-hour clock
