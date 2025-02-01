@@ -1,12 +1,15 @@
 use clap::Parser;
 use directories::BaseDirs;
+use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
+use tokio;
 
 mod time;
 use time::{format_current_time, TimeConfig};
@@ -240,11 +243,12 @@ where
     })
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let start = Instant::now();
     let cli = Cli::parse();
 
-    let result: Result<(), Box<dyn Error>> = (|| {
+    let result: Result<(), Box<dyn Error>> = (|| async {
         // Get config path and ensure it exists
         let config_path = get_config_path(&cli.config)?;
         ensure_config_exists(&config_path)?;
@@ -254,80 +258,129 @@ fn main() {
         let config = load_config(&config_path)?;
         let config_duration = config_start.elapsed();
 
-        // Time the time formatting
-        let time_start = Instant::now();
-        let _formatted_time = format_current_time(&config.time[0].format)?;
-        let time_duration = time_start.elapsed();
-
-        // Time the template formatting
-        let template_start = Instant::now();
-
         // Time the variable gathering
         let vars_start = Instant::now();
 
-        let mut variables = Vec::new();
+        // Create shared config and cli references
+        let config = Arc::new(config);
+        let validate = cli.validate;
+        let prompt_format = config.prompt.format.clone();
+
+        // Create parallel tasks for each config section
+        let mut tasks = Vec::new();
+        let mut task_names = Vec::new();
 
         // Handle time variables
-        for (i, time_config) in config.time.iter().enumerate() {
-            match format_current_time(&time_config.format) {
-                Ok(time) => {
-                    let var_name = get_var_name(time_config, "time", i);
-                    variables.push((var_name, time));
-                }
-                Err(e) => {
-                    if cli.validate {
-                        eprintln!("Warning: couldn't format time: {}", e);
+        let config_clone = Arc::clone(&config);
+        tasks.push(tokio::spawn(async move {
+            let start = Instant::now();
+            let mut time_vars = Vec::new();
+            for (i, time_config) in config_clone.time.iter().enumerate() {
+                match format_current_time(&time_config.format) {
+                    Ok(time) => {
+                        let var_name = get_var_name(time_config, "time", i);
+                        time_vars.push((var_name, time));
+                    }
+                    Err(e) => {
+                        if validate {
+                            eprintln!("Warning: couldn't format time: {}", e);
+                        }
                     }
                 }
             }
-        }
+            (time_vars, start.elapsed())
+        }));
+        task_names.push("Time variables");
 
         // Handle hostname variables
-        for (i, hostname_config) in config.hostname.iter().enumerate() {
-            let var_name = get_var_name(hostname_config, "hostname", i);
-            if format_uses_variable(&config.prompt.format, &var_name) {
-                match hostname::get_hostname(hostname_config) {
-                    Ok(hostname) => {
-                        variables.push((var_name, hostname));
-                    }
-                    Err(e) => {
-                        if cli.validate {
-                            eprintln!("Warning: couldn't get hostname: {}", e);
+        let config_clone = Arc::clone(&config);
+        let format_clone = prompt_format.clone();
+        tasks.push(tokio::spawn(async move {
+            let start = Instant::now();
+            let mut hostname_vars = Vec::new();
+            for (i, hostname_config) in config_clone.hostname.iter().enumerate() {
+                let var_name = get_var_name(hostname_config, "hostname", i);
+                if format_uses_variable(&format_clone, &var_name) {
+                    match hostname::get_hostname(hostname_config) {
+                        Ok(hostname) => {
+                            hostname_vars.push((var_name, hostname));
+                        }
+                        Err(e) => {
+                            if validate {
+                                eprintln!("Warning: couldn't get hostname: {}", e);
+                            }
                         }
                     }
                 }
             }
-        }
+            (hostname_vars, start.elapsed())
+        }));
+        task_names.push("Hostname variables");
 
         // Handle IP variables
-        for (i, ip_config) in config.ip.iter().enumerate() {
-            let var_name = get_var_name(ip_config, "ip", i);
-            if format_uses_variable(&config.prompt.format, &var_name) {
-                match ip::get_ip(ip_config) {
-                    Ok(ip) => {
-                        variables.push((var_name, ip.to_string()));
-                    }
-                    Err(e) => {
-                        if cli.validate {
-                            eprintln!("Warning: couldn't get IP: {}", e);
+        let config_clone = Arc::clone(&config);
+        let format_clone = prompt_format.clone();
+        tasks.push(tokio::spawn(async move {
+            let start = Instant::now();
+            let mut ip_vars = Vec::new();
+            for (i, ip_config) in config_clone.ip.iter().enumerate() {
+                let var_name = get_var_name(ip_config, "ip", i);
+                if format_uses_variable(&format_clone, &var_name) {
+                    match ip::get_ip(ip_config) {
+                        Ok(ip) => {
+                            ip_vars.push((var_name, ip.to_string()));
+                        }
+                        Err(e) => {
+                            if validate {
+                                eprintln!("Warning: couldn't get IP: {}", e);
+                            }
                         }
                     }
                 }
             }
-        }
+            (ip_vars, start.elapsed())
+        }));
+        task_names.push("IP variables");
 
         // Handle CWD variables
-        for (i, cwd_config) in config.cwd.iter().enumerate() {
-            let var_name = get_var_name(cwd_config, "cwd", i);
-            if format_uses_variable(&config.prompt.format, &var_name) {
-                match cwd::get_cwd(cwd_config) {
-                    Ok(dir) => {
-                        variables.push((var_name, dir));
-                    }
-                    Err(e) => {
-                        if cli.validate {
-                            eprintln!("Warning: couldn't get current directory: {}", e);
+        let config_clone = Arc::clone(&config);
+        let format_clone = prompt_format.clone();
+        tasks.push(tokio::spawn(async move {
+            let start = Instant::now();
+            let mut cwd_vars = Vec::new();
+            for (i, cwd_config) in config_clone.cwd.iter().enumerate() {
+                let var_name = get_var_name(cwd_config, "cwd", i);
+                if format_uses_variable(&format_clone, &var_name) {
+                    match cwd::get_cwd(cwd_config) {
+                        Ok(dir) => {
+                            cwd_vars.push((var_name, dir));
                         }
+                        Err(e) => {
+                            if validate {
+                                eprintln!("Warning: couldn't get current directory: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+            (cwd_vars, start.elapsed())
+        }));
+        task_names.push("CWD variables");
+
+        // Wait for all tasks to complete and combine results
+        let results = join_all(tasks).await;
+        let mut variables = Vec::new();
+        let mut task_timings = Vec::new();
+
+        for (result, task_name) in results.into_iter().zip(task_names.iter()) {
+            match result {
+                Ok((mut vars, duration)) => {
+                    variables.append(&mut vars);
+                    task_timings.push((task_name, duration));
+                }
+                Err(e) => {
+                    if validate {
+                        eprintln!("Warning: task failed: {}", e);
                     }
                 }
             }
@@ -341,10 +394,11 @@ fn main() {
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
 
+        let template_start = Instant::now();
         let output = format_template(
             &config.prompt.format,
             &template_vars,
-            cli.validate,
+            validate,
             cli.mode.as_deref(),
         )?;
         println!("{}", output);
@@ -352,14 +406,18 @@ fn main() {
         if cli.timing {
             eprintln!("\nTiming information:");
             eprintln!("  Config loading: {:?}", config_duration);
-            eprintln!("  Variable gathering: {:?}", vars_duration);
-            eprintln!("  Time formatting: {:?}", time_duration);
+            eprintln!("  Variable gathering (total): {:?}", vars_duration);
+            eprintln!("    Parallel task timings:");
+            for (name, duration) in task_timings {
+                eprintln!("      {}: {:?}", name, duration);
+            }
             eprintln!("  Template formatting: {:?}", template_start.elapsed());
             eprintln!("  Total time: {:?}", start.elapsed());
         }
 
         Ok(())
-    })();
+    })()
+    .await;
 
     if let Err(e) = result {
         if cli.validate {
