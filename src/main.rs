@@ -13,6 +13,9 @@ use time::{format_current_time, TimeConfig};
 mod template;
 use template::format_template;
 
+mod host;
+use host::{get_host_info, HostConfig};
+
 #[derive(Parser)]
 #[command(version, about = "A configurable time display utility")]
 struct Cli {
@@ -60,6 +63,8 @@ struct Config {
     time: TimeConfig,
     #[serde(default)]
     prompt: PromptConfig,
+    #[serde(default)]
+    host: HostConfig,
 }
 
 #[derive(Deserialize, Default)]
@@ -109,6 +114,11 @@ fn main() {
         let config = load_config()?;
         let config_duration = config_start.elapsed();
 
+        // Time the host info gathering
+        let host_start = Instant::now();
+        let host_info = get_host_info(&config.prompt.format)?;
+        let host_duration = host_start.elapsed();
+
         // Time the time formatting
         let time_start = Instant::now();
         let formatted_time = format_current_time(&config.time.time_format)?;
@@ -116,7 +126,18 @@ fn main() {
 
         // Time the template formatting
         let template_start = Instant::now();
-        let variables = [("time", formatted_time.as_str())];
+        let mut variables = vec![("time", formatted_time.as_str())];
+
+        // Create any needed string conversions first
+        let ip_string = host_info.ip.map(|ip| ip.to_string());
+
+        if let Some(hostname) = &host_info.hostname {
+            variables.push(("hostname", hostname));
+        }
+        if let Some(ip_str) = &ip_string {
+            variables.push(("ip", ip_str));
+        }
+
         let output = format_template(&config.prompt.format, &variables)?;
         let template_duration = template_start.elapsed();
 
@@ -125,6 +146,7 @@ fn main() {
         if cli.timing {
             eprintln!("\nTiming information:");
             eprintln!("  Config loading: {:?}", config_duration);
+            eprintln!("  Host info gathering: {:?}", host_duration);
             eprintln!("  Time formatting: {:?}", time_duration);
             eprintln!("  Template formatting: {:?}", template_duration);
             eprintln!("  Total time: {:?}", start.elapsed());

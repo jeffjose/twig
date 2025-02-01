@@ -12,5 +12,18 @@ time_format = "%H:%M:%S"
 # Compact date and time
 # time_format = "%d/%m/%y %H:%M"  # Example: 20/03/24 14:30
 
+[hostname]
+# Hostname-specific options could go here
+# format = "{}" # for future use
+
+[ip]
+# IP-specific options could go here
+# interface = "eth0" # for future use
+
 [prompt]
-format = "foo: {time}"
+# Available variables: {time}, {hostname}, {ip}
+format = "[{hostname}:{ip}] {time}"
+
+# Or other format examples:
+# format = "{time} on {hostname}"
+# format = "{hostname} ({ip}) at {time}"
