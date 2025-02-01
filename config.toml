@@ -37,7 +37,7 @@ shorten = false
 #         bright_magenta, bright_cyan, bright_white
 # Multi-line format example
 format = """
--({time:cyan} {host:magenta} {local:magenta} {dir:green} {$USER:yellow})-
+-({time:cyan} {$HOST:magenta} {local:magenta} {dir:green} {$USER:yellow})-
 # """
 
 # Or another example:
