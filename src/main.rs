@@ -270,6 +270,33 @@ fn get_env_vars_from_format(format: &str) -> Vec<String> {
     env_vars
 }
 
+// Add this helper function near the other helper functions
+fn format_uses_named_variable(format: &str, section: &str, name: &str) -> bool {
+    let var_name = if name.is_empty() {
+        section.to_string()
+    } else {
+        name.to_string()
+    };
+    format_uses_variable(format, &var_name)
+}
+
+// Add this helper function to print debug info about variable usage
+fn debug_variable_usage(format: &str, section: &str, var_name: &str, validate: bool) {
+    if validate {
+        if format_uses_variable(format, var_name) {
+            eprintln!(
+                "Debug: Will process {} section for variable '{}'",
+                section, var_name
+            );
+        } else {
+            eprintln!(
+                "Debug: Skipping {} section - variable '{}' not used",
+                section, var_name
+            );
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let start = Instant::now();
@@ -299,18 +326,22 @@ async fn main() {
 
         // Handle time variables
         let config_clone = Arc::clone(&config);
+        let format_clone = prompt_format.clone();
         tasks.push(tokio::spawn(async move {
             let start = Instant::now();
             let mut time_vars = Vec::new();
             for (i, time_config) in config_clone.time.iter().enumerate() {
-                match format_current_time(&time_config.format) {
-                    Ok(time) => {
-                        let var_name = get_var_name(time_config, "time", i);
-                        time_vars.push((var_name, time));
-                    }
-                    Err(e) => {
-                        if validate {
-                            eprintln!("Warning: couldn't format time: {}", e);
+                let var_name = get_var_name(time_config, "time", i);
+                debug_variable_usage(&format_clone, "time", &var_name, validate);
+                if format_uses_variable(&format_clone, &var_name) {
+                    match format_current_time(&time_config.format) {
+                        Ok(time) => {
+                            time_vars.push((var_name, time));
+                        }
+                        Err(e) => {
+                            if validate {
+                                eprintln!("Warning: couldn't format time: {}", e);
+                            }
                         }
                     }
                 }
@@ -322,11 +353,13 @@ async fn main() {
         // Handle hostname variables
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
+        let validate_clone = validate;
         tasks.push(tokio::spawn(async move {
             let start = Instant::now();
             let mut hostname_vars = Vec::new();
             for (i, hostname_config) in config_clone.hostname.iter().enumerate() {
                 let var_name = get_var_name(hostname_config, "hostname", i);
+                debug_variable_usage(&format_clone, "hostname", &var_name, validate_clone);
                 if format_uses_variable(&format_clone, &var_name) {
                     match hostname::get_hostname(hostname_config) {
                         Ok(hostname) => {
@@ -347,11 +380,13 @@ async fn main() {
         // Handle IP variables
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
+        let validate_clone = validate;
         tasks.push(tokio::spawn(async move {
             let start = Instant::now();
             let mut ip_vars = Vec::new();
             for (i, ip_config) in config_clone.ip.iter().enumerate() {
                 let var_name = get_var_name(ip_config, "ip", i);
+                debug_variable_usage(&format_clone, "ip", &var_name, validate_clone);
                 if format_uses_variable(&format_clone, &var_name) {
                     match ip::get_ip(ip_config) {
                         Ok(ip) => {
@@ -377,6 +412,7 @@ async fn main() {
             let mut cwd_vars = Vec::new();
             for (i, cwd_config) in config_clone.cwd.iter().enumerate() {
                 let var_name = get_var_name(cwd_config, "cwd", i);
+                debug_variable_usage(&format_clone, "cwd", &var_name, validate);
                 if format_uses_variable(&format_clone, &var_name) {
                     match cwd::get_cwd(cwd_config) {
                         Ok(dir) => {
