@@ -1,15 +1,25 @@
+use clap::Parser;
 use directories::BaseDirs;
 use serde::Deserialize;
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Instant;
 
 mod time;
 use time::{format_current_time, TimeConfig};
 
 mod template;
-use template::{format_template, TemplateError};
+use template::format_template;
+
+#[derive(Parser)]
+#[command(version, about = "A configurable time display utility")]
+struct Cli {
+    /// Show timing information for each step
+    #[arg(short, long)]
+    timing: bool,
+}
 
 #[derive(Debug)]
 enum ConfigError {
@@ -90,26 +100,41 @@ fn load_config() -> Result<Config, ConfigError> {
 }
 
 fn main() {
-    match load_config() {
-        Ok(config) => match format_current_time(&config.time.time_format) {
-            Ok(formatted_time) => {
-                let variables = [("time", formatted_time.as_str())];
-                match format_template(&config.prompt.format, &variables) {
-                    Ok(output) => println!("{}", output),
-                    Err(e) => {
-                        eprintln!("Template error: {}", e);
-                        std::process::exit(1);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Error formatting time: {}", e);
-                std::process::exit(1);
-            }
-        },
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
+    let start = Instant::now();
+    let cli = Cli::parse();
+
+    let result: Result<(), Box<dyn Error>> = (|| {
+        // Time the config loading
+        let config_start = Instant::now();
+        let config = load_config()?;
+        let config_duration = config_start.elapsed();
+
+        // Time the time formatting
+        let time_start = Instant::now();
+        let formatted_time = format_current_time(&config.time.time_format)?;
+        let time_duration = time_start.elapsed();
+
+        // Time the template formatting
+        let template_start = Instant::now();
+        let variables = [("time", formatted_time.as_str())];
+        let output = format_template(&config.prompt.format, &variables)?;
+        let template_duration = template_start.elapsed();
+
+        println!("{}", output);
+
+        if cli.timing {
+            eprintln!("\nTiming information:");
+            eprintln!("  Config loading: {:?}", config_duration);
+            eprintln!("  Time formatting: {:?}", time_duration);
+            eprintln!("  Template formatting: {:?}", template_duration);
+            eprintln!("  Total time: {:?}", start.elapsed());
         }
+
+        Ok(())
+    })();
+
+    if let Err(e) = result {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
     }
 }
