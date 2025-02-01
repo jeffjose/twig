@@ -98,14 +98,38 @@ fn validate_time_format(format: &str) -> Result<(), ConfigError> {
         .map_err(|_| ConfigError::InvalidTimeFormat(format.to_string()))
 }
 
-fn load_config() -> Result<Config, ConfigError> {
+fn ensure_config_exists() -> Result<(), ConfigError> {
     let config_path = get_config_path()?;
 
-    if !config_path.exists() {
-        let config = Config::default();
-        validate_time_format(&config.time.time_format)?;
-        return Ok(config);
+    // Create parent directories if they don't exist
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
     }
+
+    // Create default config if it doesn't exist
+    if !config_path.exists() {
+        let default_config = r#"[time]
+time_format = "%H:%M:%S"
+
+[hostname]
+# Hostname-specific options could go here
+
+[ip]
+# IP-specific options could go here
+
+[cwd]
+shorten = false
+
+[prompt]
+format = "[{hostname:cyan}:{cwd:blue}] {time:green}"
+"#;
+        fs::write(config_path, default_config)?;
+    }
+    Ok(())
+}
+
+fn load_config() -> Result<Config, ConfigError> {
+    let config_path = get_config_path()?;
 
     let content = fs::read_to_string(config_path)?;
     let config: Config = toml::from_str(&content)?;
@@ -113,11 +137,19 @@ fn load_config() -> Result<Config, ConfigError> {
     Ok(config)
 }
 
+// Helper function to check if a variable is used in the format string
+fn format_uses_variable(format: &str, var_name: &str) -> bool {
+    format.contains(&format!("{{{}", var_name))
+}
+
 fn main() {
     let start = Instant::now();
     let cli = Cli::parse();
 
     let result: Result<(), Box<dyn Error>> = (|| {
+        // Ensure config exists
+        ensure_config_exists()?;
+
         // Time the config loading
         let config_start = Instant::now();
         let config = load_config()?;
@@ -142,7 +174,7 @@ fn main() {
         let mut ip_idx = None;
         let mut cwd_idx = None;
 
-        if config.prompt.format.contains("{hostname}") {
+        if format_uses_variable(&config.prompt.format, "hostname") {
             match hostname::get_hostname(&config.hostname) {
                 Ok(hostname) => {
                     collected_strings.push(hostname);
@@ -152,7 +184,7 @@ fn main() {
             }
         }
 
-        if config.prompt.format.contains("{ip}") {
+        if format_uses_variable(&config.prompt.format, "ip") {
             match ip::get_ip(&config.ip) {
                 Ok(ip) => {
                     collected_strings.push(ip.to_string());
@@ -162,7 +194,7 @@ fn main() {
             }
         }
 
-        if config.prompt.format.contains("{cwd}") {
+        if format_uses_variable(&config.prompt.format, "cwd") {
             match cwd::get_cwd(&config.cwd) {
                 Ok(dir) => {
                     collected_strings.push(dir);
@@ -190,8 +222,6 @@ fn main() {
         let vars_duration = vars_start.elapsed();
 
         let output = format_template(&config.prompt.format, &variables)?;
-        let template_duration = template_start.elapsed();
-
         println!("{}", output);
 
         if cli.timing {
@@ -199,7 +229,7 @@ fn main() {
             eprintln!("  Config loading: {:?}", config_duration);
             eprintln!("  Variable gathering: {:?}", vars_duration);
             eprintln!("  Time formatting: {:?}", time_duration);
-            eprintln!("  Template formatting: {:?}", template_duration);
+            eprintln!("  Template formatting: {:?}", template_start.elapsed());
             eprintln!("  Total time: {:?}", start.elapsed());
         }
 

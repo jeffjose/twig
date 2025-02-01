@@ -26,9 +26,13 @@ time_format = "%H:%M:%S"
 shorten = false
 
 [prompt]
-# Available variables: {time}, {hostname}, {ip}, {cwd}
-format = "[{hostname}:{cwd}] {time}"
+# Available variables with optional colors:
+# {var} or {var:color}
+# Colors: red, green, yellow, blue, magenta, cyan, white
+#         bright_red, bright_green, bright_yellow, bright_blue, 
+#         bright_magenta, bright_cyan, bright_white
+format = "-({time:cyan} {hostname:magenta} {ip:magenta} {cwd:green})-"
 
-# Or other format examples:
-# format = "{time} on {hostname}"
-# format = "{hostname} ({ip}) at {time}"
+# Some other examples:
+# format = "{time:bright_green} on {hostname:bright_blue}"
+# format = "[{cwd:yellow}] {hostname:cyan} ({ip:magenta}) at {time:green}"

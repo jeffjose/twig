@@ -5,14 +5,12 @@ use hostname;
 #[derive(Debug)]
 pub enum HostnameError {
     Lookup(std::io::Error),
-    Invalid(std::string::FromUtf8Error),
 }
 
 impl std::fmt::Display for HostnameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HostnameError::Lookup(e) => write!(f, "Failed to get hostname: {}", e),
-            HostnameError::Invalid(e) => write!(f, "Invalid hostname: {}", e),
         }
     }
 }
