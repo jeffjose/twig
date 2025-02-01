@@ -22,6 +22,8 @@ use ip::Config as IpConfig;
 mod cwd;
 use cwd::Config as CwdConfig;
 
+mod template_test;
+
 #[derive(Parser)]
 #[command(version, about = "A configurable time display utility")]
 struct Cli {
