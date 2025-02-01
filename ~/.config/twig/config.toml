@@ -20,9 +20,14 @@ time_format = "%H:%M:%S"
 # IP-specific options could go here
 # interface = "eth0" # for future use
 
+[cwd]
+# If true, shows only the current directory name
+# If false, shows full path
+shorten = false
+
 [prompt]
-# Available variables: {time}, {hostname}, {ip}
-format = "[{hostname}:{ip}] {time}"
+# Available variables: {time}, {hostname}, {ip}, {cwd}
+format = "[{hostname}:{cwd}] {time}"
 
 # Or other format examples:
 # format = "{time} on {hostname}"

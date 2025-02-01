@@ -18,6 +18,9 @@ mod ip;
 use hostname::Config as HostnameConfig;
 use ip::Config as IpConfig;
 
+mod cwd;
+use cwd::Config as CwdConfig;
+
 #[derive(Parser)]
 #[command(version, about = "A configurable time display utility")]
 struct Cli {
@@ -69,6 +72,8 @@ struct Config {
     hostname: HostnameConfig,
     #[serde(default)]
     ip: IpConfig,
+    #[serde(default)]
+    cwd: CwdConfig,
 }
 
 #[derive(Deserialize, Default)]
@@ -135,6 +140,7 @@ fn main() {
 
         let mut hostname_idx = None;
         let mut ip_idx = None;
+        let mut cwd_idx = None;
 
         if config.prompt.format.contains("{hostname}") {
             match hostname::get_hostname(&config.hostname) {
@@ -156,6 +162,16 @@ fn main() {
             }
         }
 
+        if config.prompt.format.contains("{cwd}") {
+            match cwd::get_cwd(&config.cwd) {
+                Ok(dir) => {
+                    collected_strings.push(dir);
+                    cwd_idx = Some(collected_strings.len() - 1);
+                }
+                Err(e) => eprintln!("Warning: couldn't get current directory: {}", e),
+            }
+        }
+
         // Now build the variables vector
         let mut variables = vec![("time", collected_strings[0].as_str())];
 
@@ -165,6 +181,10 @@ fn main() {
 
         if let Some(idx) = ip_idx {
             variables.push(("ip", collected_strings[idx].as_str()));
+        }
+
+        if let Some(idx) = cwd_idx {
+            variables.push(("cwd", collected_strings[idx].as_str()));
         }
 
         let vars_duration = vars_start.elapsed();
