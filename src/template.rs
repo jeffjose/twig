@@ -93,14 +93,11 @@ pub fn format_template(
     show_warnings: bool,
     mode: Option<&str>,
 ) -> Result<String, TemplateError> {
-    // Handle each line separately to preserve newlines
-    let lines: Vec<&str> = template.lines().collect();
-    let mut result_lines = Vec::with_capacity(lines.len());
+    // For tcsh mode, process the entire template as one string
+    if mode == Some("tcsh") {
+        let mut result = template.to_string();
 
-    for line in lines {
-        let mut result = line.to_string();
-
-        // First, validate that all variables in the template are provided
+        // First, validate all variables in the template
         let mut pos = 0;
         while let Some(start) = result[pos..].find('{') {
             let start = start + pos;
@@ -133,7 +130,7 @@ pub fn format_template(
                 if let Some(end) = result[after_var..].find('}') {
                     let end = end + after_var;
                     let color = &result[after_var..end];
-                    let colored_value = apply_color(value, color, show_warnings, mode)?;
+                    let colored_value = apply_color(value, color, show_warnings, Some("tcsh"))?;
                     result.replace_range(start..end + 1, &colored_value);
                     position = start + colored_value.len();
                 }
@@ -148,21 +145,81 @@ pub fn format_template(
             }
         }
 
-        result_lines.push(result);
+        // Replace actual newlines with literal "\n"
+        let mut final_result = String::new();
+        let mut chars = result.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\n' {
+                final_result.push_str("\\n");
+            } else {
+                final_result.push(ch);
+            }
+        }
+
+        Ok(final_result)
+    } else {
+        // Original code for non-tcsh mode
+        let lines: Vec<&str> = template.lines().collect();
+        let mut result_lines = Vec::with_capacity(lines.len());
+
+        for line in lines {
+            let mut result = line.to_string();
+
+            // First, validate that all variables in the template are provided
+            let mut pos = 0;
+            while let Some(start) = result[pos..].find('{') {
+                let start = start + pos;
+                if let Some(end) = result[start..].find('}') {
+                    let end = end + start;
+                    let var_spec = &result[start + 1..end];
+                    let var_name = if let Some(colon) = var_spec.find(':') {
+                        &var_spec[..colon]
+                    } else {
+                        var_spec
+                    };
+
+                    if !variables.iter().any(|(name, _)| *name == var_name) {
+                        return Err(TemplateError::MissingVariable(var_name.to_string()));
+                    }
+                    pos = end + 1;
+                } else {
+                    return Err(TemplateError::InvalidSyntax("Unclosed variable".into()));
+                }
+            }
+
+            // Process colored variables first
+            for (name, value) in variables {
+                let pattern = format!("{{{}:", name);
+                let mut position = 0;
+                while let Some(start) = result[position..].find(&pattern) {
+                    let start = start + position;
+                    let after_var = start + pattern.len();
+
+                    if let Some(end) = result[after_var..].find('}') {
+                        let end = end + after_var;
+                        let color = &result[after_var..end];
+                        let colored_value = apply_color(value, color, show_warnings, mode)?;
+                        result.replace_range(start..end + 1, &colored_value);
+                        position = start + colored_value.len();
+                    }
+                }
+            }
+
+            result_lines.push(result);
+        }
+
+        // For tcsh mode, preserve literal newlines
+        match mode {
+            Some("tcsh") => Ok(result_lines.join("\n")),
+            _ => {
+                // For other modes, filter out empty lines and join
+                Ok(result_lines
+                    .into_iter()
+                    .filter(|line| !line.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+        }
     }
-
-    let final_result = match mode {
-        Some("tcsh") => {
-            // For tcsh mode, join with escaped newlines and add end marker
-            let mut result = result_lines.join("\\\n"); // Escape newlines with backslash
-            result.push_str("%{\x1b[0m%}");
-            result
-        }
-        _ => {
-            // For other modes, just join with newlines
-            result_lines.join("\n")
-        }
-    };
-
-    Ok(final_result)
 }
