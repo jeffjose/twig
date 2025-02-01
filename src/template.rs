@@ -151,6 +151,18 @@ pub fn format_template(
         result_lines.push(result);
     }
 
-    // Join the lines back together with newlines
-    Ok(result_lines.join("\n"))
+    let final_result = match mode {
+        Some("tcsh") => {
+            // For tcsh mode, join with escaped newlines and add end marker
+            let mut result = result_lines.join("\\\n"); // Escape newlines with backslash
+            result.push_str("%{\x1b[0m%}");
+            result
+        }
+        _ => {
+            // For other modes, just join with newlines
+            result_lines.join("\n")
+        }
+    };
+
+    Ok(final_result)
 }
