@@ -23,11 +23,16 @@ impl Error for IpConfigError {}
 
 #[derive(Deserialize, Serialize, Default)]
 pub struct Config {
-    // IP-specific config options will go here
     pub name: Option<String>,
     pub interface: Option<String>,
+    #[serde(default = "default_format")]
+    pub format: String,
     #[serde(default = "default_error")]
     pub error: String,
+}
+
+fn default_format() -> String {
+    "{ip}".to_string()  // Default format using {ip} variable
 }
 
 fn default_error() -> String {
@@ -35,7 +40,7 @@ fn default_error() -> String {
 }
 
 pub fn get_ip(config: &Config) -> Result<IpAddr, IpConfigError> {
-    match &config.interface {
+    let raw_ip = match &config.interface {
         Some(interface) => {
             // Get all network interfaces
             let interfaces = list_afinet_netifas()
@@ -46,14 +51,17 @@ pub fn get_ip(config: &Config) -> Result<IpAddr, IpConfigError> {
                 .iter()
                 .find(|(name, _)| name == interface)
                 .map(|(_, addr)| *addr)
-                .ok_or_else(|| IpConfigError::InterfaceNotFound(interface.clone()))
+                .ok_or_else(|| IpConfigError::InterfaceNotFound(interface.clone()))?
         }
         None => {
             // Default behavior: get the default local IP
             local_ip_address::local_ip()
-                .map_err(|e| IpConfigError::Lookup(e.to_string()))
+                .map_err(|e| IpConfigError::Lookup(e.to_string()))?
         }
-    }
+    };
+
+    // Format the IP using the format string
+    Ok(raw_ip)
 }
 
 impl ConfigWithName for Config {
@@ -72,7 +80,8 @@ impl VariableProvider for IpProvider {
     type Config = Config;
 
     fn get_value(config: &Self::Config) -> Result<String, Self::Error> {
-        get_ip(config).map(|ip| ip.to_string())
+        let ip = get_ip(config)?;
+        Ok(config.format.replace("{ip}", &ip.to_string()))
     }
 
     fn section_name() -> &'static str {

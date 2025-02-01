@@ -25,8 +25,14 @@ impl Error for CwdError {}
 pub struct Config {
     pub name: Option<String>,
     pub shorten: bool,
+    #[serde(default = "default_format")]
+    pub format: String,
     #[serde(default = "default_error")]
     pub error: String,
+}
+
+fn default_format() -> String {
+    "{cwd}".to_string()  // Default format using {cwd} variable
 }
 
 fn default_error() -> String {
@@ -36,17 +42,18 @@ fn default_error() -> String {
 pub fn get_cwd(config: &Config) -> Result<String, CwdError> {
     let path = env::current_dir().map_err(CwdError::GetCwd)?;
     
-    if config.shorten {
-        Ok(path
-            .file_name()
+    let raw_cwd = if config.shorten {
+        path.file_name()
             .and_then(|name| name.to_str())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| String::from(".")))
+            .unwrap_or_else(|| String::from("."))
     } else {
         path.to_str()
             .map(|s| s.to_string())
-            .ok_or_else(|| CwdError::ToString(path.into_os_string()))
-    }
+            .ok_or_else(|| CwdError::ToString(path.into_os_string()))?
+    };
+
+    Ok(config.format.replace("{cwd}", &raw_cwd))
 }
 
 impl ConfigWithName for Config {

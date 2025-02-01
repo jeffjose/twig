@@ -91,4 +91,71 @@ mod tests {
         let error = HostnameError::Lookup(io::Error::new(io::ErrorKind::Other, "test error"));
         assert!(error.to_string().contains("test error"));
     }
+
+    #[test]
+    fn test_hostname_default_format() {
+        let config = Config {
+            name: Some("host".to_string()),
+            format: "{hostname}".to_string(),
+            error: String::new(),
+        };
+
+        let result = HostnameProvider::get_value(&config).unwrap();
+        // Should be just the hostname without any formatting
+        assert!(!result.is_empty());
+        assert!(!result.contains("{hostname}"));
+    }
+
+    #[test]
+    fn test_hostname_custom_format() {
+        let config = Config {
+            name: Some("host".to_string()),
+            format: "HOST={hostname}".to_string(),
+            error: String::new(),
+        };
+
+        let result = HostnameProvider::get_value(&config).unwrap();
+        assert!(result.starts_with("HOST="));
+        assert!(!result.contains("{hostname}"));
+    }
+
+    #[test]
+    fn test_hostname_bracketed_format() {
+        let config = Config {
+            name: Some("host".to_string()),
+            format: "[{hostname}]".to_string(),
+            error: String::new(),
+        };
+
+        let result = HostnameProvider::get_value(&config).unwrap();
+        assert!(result.starts_with("["));
+        assert!(result.ends_with("]"));
+        assert!(!result.contains("{hostname}"));
+    }
+
+    #[test]
+    fn test_hostname_format_multiple_replacements() {
+        let config = Config {
+            name: Some("host".to_string()),
+            format: "{hostname} - {hostname}".to_string(),
+            error: String::new(),
+        };
+
+        let result = HostnameProvider::get_value(&config).unwrap();
+        let parts: Vec<&str> = result.split(" - ").collect();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], parts[1]); // Both replacements should be identical
+    }
+
+    #[test]
+    fn test_hostname_empty_format() {
+        let config = Config {
+            name: Some("host".to_string()),
+            format: String::new(),
+            error: String::new(),
+        };
+
+        let result = HostnameProvider::get_value(&config).unwrap();
+        assert!(result.is_empty());
+    }
 } 

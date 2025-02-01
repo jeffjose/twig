@@ -13,9 +13,8 @@ format = "%H:%M:%S"
 # time_format = "%d/%m/%y %H:%M"  # Example: 20/03/24 14:30
 
 [[hostname]]
-name = "host"
 # Hostname-specific options could go here
-# format = "{}" # for future use
+format = "HOSTNAME={hostname}" # for future use
 
 [[ip]]
 name = "local"
@@ -28,7 +27,6 @@ name = "dir"
 # If true, shows only the current directory name
 # If false, shows full path
 shorten = false
-format = "x {cwd} x"
 
 [prompt]
 # Available variables with optional colors:
@@ -40,7 +38,7 @@ format = "x {cwd} x"
 # Multi-line format example
 format = """
 -----
--({time:cyan} {$HOST:magenta} {local:magenta} ? {dir:green} ? {$USER:yellow})-
+-({time:cyan} {$HOST:magenta} {hostname:magenta} {local:magenta} {dir:green} {$USER:yellow})-
 # 
 -----
 """
