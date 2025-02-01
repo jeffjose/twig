@@ -34,7 +34,15 @@ shorten = false
 # Colors: red, green, yellow, blue, magenta, cyan, white
 #         bright_red, bright_green, bright_yellow, bright_blue,
 #         bright_magenta, bright_cyan, bright_white
-format = "-({time:cyan} {host:magenta} {local:magenta} {dir:green})-"
+# Multi-line format example
+format = """
+-({time:cyan} {host:magenta} {local:magenta} {dir:green})-
+# """
+
+# Or another example:
+# format = '''
+# ┌─[{time:cyan}] - [{host:magenta}]
+# └─[{dir:green}] $'''
 
 # Test different combinations of colored and non-colored variables
 # Other format examples:

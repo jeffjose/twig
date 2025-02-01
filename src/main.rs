@@ -32,6 +32,10 @@ struct Cli {
     /// Use an alternate config file
     #[arg(short, long)]
     config: Option<PathBuf>,
+
+    /// Output mode (e.g. 'tcsh')
+    #[arg(long)]
+    mode: Option<String>,
 }
 
 #[derive(Debug)]
@@ -315,7 +319,12 @@ fn main() {
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
 
-        let output = format_template(&config.prompt.format, &template_vars, cli.timing)?;
+        let output = format_template(
+            &config.prompt.format,
+            &template_vars,
+            cli.timing,
+            cli.mode.as_deref(),
+        )?;
         println!("{}", output);
 
         if cli.timing {
