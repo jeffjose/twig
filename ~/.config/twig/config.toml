@@ -1,0 +1,13 @@
+[time]
+# Basic time format (default if not specified)
+time_format = "%H:%M:%S"
+
+# Or you can use these alternative formats:
+# Full date and time with 12-hour clock
+# time_format = "%Y-%m-%d %I:%M:%S %p"  # Example: 2024-03-20 02:30:45 PM
+
+# Verbose format with day and month names
+# time_format = "%A, %B %d, %Y at %H:%M:%S"  # Example: Wednesday, March 20, 2024 at 14:30:45
+
+# Compact date and time
+# time_format = "%d/%m/%y %H:%M"  # Example: 20/03/24 14:30 
