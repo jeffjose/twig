@@ -36,6 +36,8 @@ mod env_var_test;
 
 mod cwd_test;
 
+mod hostname_test;
+
 #[derive(Parser)]
 #[command(version, about = "A configurable time display utility")]
 struct Cli {
