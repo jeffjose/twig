@@ -3,7 +3,6 @@ use directories::BaseDirs;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -30,6 +29,8 @@ mod template_test;
 
 mod variable;
 use variable::{process_section, ProcessingResult};
+
+mod env_var;
 
 #[derive(Parser)]
 #[command(version, about = "A configurable time display utility")]
@@ -210,43 +211,6 @@ fn load_config(config_path: &PathBuf) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-// Helper function to check if a variable is used in the format string
-fn format_uses_variable(format: &str, var_name: &str) -> bool {
-    format.contains(&format!("{{{}", var_name))
-}
-
-// Helper function to get variable name for a config
-fn get_var_name<T>(config: &T, section_name: &str, index: usize) -> String
-where
-    T: serde::de::DeserializeOwned + Default + Serialize,
-{
-    #[derive(Deserialize)]
-    struct NamedConfig {
-        name: Option<String>,
-    }
-
-    // Try to deserialize just the name field
-    let named: NamedConfig =
-        match serde_json::to_value(config).and_then(|v| serde_json::from_value(v)) {
-            Ok(n) => n,
-            Err(_) => {
-                return if index == 0 {
-                    section_name.to_string()
-                } else {
-                    format!("{}_{}", section_name, index + 1)
-                }
-            }
-        };
-
-    named.name.unwrap_or_else(|| {
-        if index == 0 {
-            section_name.to_string()
-        } else {
-            format!("{}_{}", section_name, index + 1)
-        }
-    })
-}
-
 fn get_env_vars_from_format(format: &str) -> Vec<String> {
     let mut env_vars = Vec::new();
     let mut chars = format.chars().peekable();
@@ -271,33 +235,6 @@ fn get_env_vars_from_format(format: &str) -> Vec<String> {
         }
     }
     env_vars
-}
-
-// Add this helper function near the other helper functions
-fn format_uses_named_variable(format: &str, section: &str, name: &str) -> bool {
-    let var_name = if name.is_empty() {
-        section.to_string()
-    } else {
-        name.to_string()
-    };
-    format_uses_variable(format, &var_name)
-}
-
-// Add this helper function to print debug info about variable usage
-fn debug_variable_usage(format: &str, section: &str, var_name: &str, validate: bool) {
-    if validate {
-        if format_uses_variable(format, var_name) {
-            eprintln!(
-                "Debug: Will process {} section for variable '{}'",
-                section, var_name
-            );
-        } else {
-            eprintln!(
-                "Debug: Skipping {} section - variable '{}' not used",
-                section, var_name
-            );
-        }
-    }
 }
 
 #[tokio::main]
@@ -369,19 +306,14 @@ async fn main() {
         // Handle environment variables
         let format_clone = prompt_format.clone();
         tasks.push(tokio::spawn(async move {
-            let start = Instant::now();
-            let mut variables = Vec::new();
-
+            let mut configs = Vec::new();
             for var_name in get_env_vars_from_format(&format_clone) {
-                if let Ok(value) = env::var(&var_name) {
-                    variables.push((format!("${}", var_name), value));
-                }
+                configs.push(env_var::Config {
+                    name: var_name,
+                    error: String::new(),
+                });
             }
-
-            ProcessingResult {
-                variables,
-                duration: start.elapsed(),
-            }
+            process_section::<env_var::EnvProvider>(&configs, &format_clone, validate).await
         }));
         task_names.push("Environment variables");
 
