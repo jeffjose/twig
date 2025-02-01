@@ -13,8 +13,10 @@ use time::{format_current_time, TimeConfig};
 mod template;
 use template::format_template;
 
-mod host;
-use host::{get_host_info, HostConfig};
+mod hostname;
+mod ip;
+use hostname::Config as HostnameConfig;
+use ip::Config as IpConfig;
 
 #[derive(Parser)]
 #[command(version, about = "A configurable time display utility")]
@@ -64,7 +66,9 @@ struct Config {
     #[serde(default)]
     prompt: PromptConfig,
     #[serde(default)]
-    host: HostConfig,
+    hostname: HostnameConfig,
+    #[serde(default)]
+    ip: IpConfig,
 }
 
 #[derive(Deserialize, Default)]
@@ -114,11 +118,6 @@ fn main() {
         let config = load_config()?;
         let config_duration = config_start.elapsed();
 
-        // Time the host info gathering
-        let host_start = Instant::now();
-        let host_info = get_host_info(&config.prompt.format)?;
-        let host_duration = host_start.elapsed();
-
         // Time the time formatting
         let time_start = Instant::now();
         let formatted_time = format_current_time(&config.time.time_format)?;
@@ -126,17 +125,49 @@ fn main() {
 
         // Time the template formatting
         let template_start = Instant::now();
-        let mut variables = vec![("time", formatted_time.as_str())];
 
-        // Create any needed string conversions first
-        let ip_string = host_info.ip.map(|ip| ip.to_string());
+        // Time the variable gathering
+        let vars_start = Instant::now();
 
-        if let Some(hostname) = &host_info.hostname {
-            variables.push(("hostname", hostname));
+        // Collect all strings first
+        let mut collected_strings = Vec::new();
+        collected_strings.push(formatted_time);
+
+        let mut hostname_idx = None;
+        let mut ip_idx = None;
+
+        if config.prompt.format.contains("{hostname}") {
+            match hostname::get_hostname(&config.hostname) {
+                Ok(hostname) => {
+                    collected_strings.push(hostname);
+                    hostname_idx = Some(collected_strings.len() - 1);
+                }
+                Err(e) => eprintln!("Warning: couldn't get hostname: {}", e),
+            }
         }
-        if let Some(ip_str) = &ip_string {
-            variables.push(("ip", ip_str));
+
+        if config.prompt.format.contains("{ip}") {
+            match ip::get_ip(&config.ip) {
+                Ok(ip) => {
+                    collected_strings.push(ip.to_string());
+                    ip_idx = Some(collected_strings.len() - 1);
+                }
+                Err(e) => eprintln!("Warning: couldn't get IP: {}", e),
+            }
         }
+
+        // Now build the variables vector
+        let mut variables = vec![("time", collected_strings[0].as_str())];
+
+        if let Some(idx) = hostname_idx {
+            variables.push(("hostname", collected_strings[idx].as_str()));
+        }
+
+        if let Some(idx) = ip_idx {
+            variables.push(("ip", collected_strings[idx].as_str()));
+        }
+
+        let vars_duration = vars_start.elapsed();
 
         let output = format_template(&config.prompt.format, &variables)?;
         let template_duration = template_start.elapsed();
@@ -146,7 +177,7 @@ fn main() {
         if cli.timing {
             eprintln!("\nTiming information:");
             eprintln!("  Config loading: {:?}", config_duration);
-            eprintln!("  Host info gathering: {:?}", host_duration);
+            eprintln!("  Variable gathering: {:?}", vars_duration);
             eprintln!("  Time formatting: {:?}", time_duration);
             eprintln!("  Template formatting: {:?}", template_duration);
             eprintln!("  Total time: {:?}", start.elapsed());
