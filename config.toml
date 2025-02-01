@@ -30,13 +30,14 @@ shorten = false
 
 [prompt]
 # Available variables with optional colors:
-# {var} or {var:color}
+# {var} or {var:color} - For configured variables
+# {$ENV_VAR} or {$ENV_VAR:color} - For environment variables
 # Colors: red, green, yellow, blue, magenta, cyan, white
 #         bright_red, bright_green, bright_yellow, bright_blue,
 #         bright_magenta, bright_cyan, bright_white
 # Multi-line format example
 format = """
--({time:cyan} {host:magenta} {local:magenta} {dir:green})-
+-({time:cyan} {host:magenta} {local:magenta} {dir:green} {$USER:yellow})-
 # """
 
 # Or another example:
@@ -58,3 +59,8 @@ format = """
 # Examples of using named variables:
 # format = "[{host:cyan}:{dir:blue}] {time:green} ({utc:yellow})"
 # format = "{time} - {utc} - {host}"
+
+# Examples using environment variables:
+# format = "[{$USER}@{host}] {time}"
+# format = "{time} [{$PWD:blue}] {$SHELL:green}"
+# format = "{$LANG} - {$TERM} - {time}"

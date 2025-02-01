@@ -3,6 +3,7 @@ use directories::BaseDirs;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json;
+use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -243,6 +244,40 @@ where
     })
 }
 
+fn get_env_vars_from_format(format: &str) -> Vec<String> {
+    let mut env_vars = Vec::new();
+    let mut chars = format.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '{' && chars.peek() == Some(&'$') {
+            chars.next(); // consume $
+            let mut var_name = String::new();
+            while let Some(&next_char) = chars.peek() {
+                if next_char == '}' || next_char == ':' {
+                    // If we hit a color specification or end, stop collecting the var name
+                    if next_char == ':' {
+                        // Skip over the color specification until we find '}'
+                        while let Some(&c) = chars.peek() {
+                            chars.next();
+                            if c == '}' {
+                                break;
+                            }
+                        }
+                    } else {
+                        chars.next(); // consume the '}'
+                    }
+                    if !var_name.is_empty() {
+                        env_vars.push(var_name);
+                    }
+                    break;
+                }
+                var_name.push(chars.next().unwrap());
+            }
+        }
+    }
+    env_vars
+}
+
 #[tokio::main]
 async fn main() {
     let start = Instant::now();
@@ -366,6 +401,22 @@ async fn main() {
             (cwd_vars, start.elapsed())
         }));
         task_names.push("CWD variables");
+
+        // Handle environment variables
+        let format_clone = prompt_format.clone();
+        tasks.push(tokio::spawn(async move {
+            let start = Instant::now();
+            let mut env_vars = Vec::new();
+
+            for var_name in get_env_vars_from_format(&format_clone) {
+                if let Ok(value) = env::var(&var_name) {
+                    env_vars.push((format!("${}", var_name), value));
+                }
+            }
+
+            (env_vars, start.elapsed())
+        }));
+        task_names.push("Environment variables");
 
         // Wait for all tasks to complete and combine results
         let results = join_all(tasks).await;
