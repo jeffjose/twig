@@ -5,6 +5,17 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+
+    fn setup_home_dir() -> PathBuf {
+        #[cfg(windows)]
+        let home = PathBuf::from(r"C:\Users\testuser");
+        #[cfg(not(windows))]
+        let home = PathBuf::from("/home/testuser");
+
+        env::set_var("HOME", &home);
+        home
+    }
 
     #[test]
     fn test_cwd_variables() {
@@ -124,5 +135,47 @@ mod tests {
             error: "test_error".to_string(),
         };
         assert_eq!(config.error(), "test_error");
+    }
+
+    #[test]
+    fn test_cwd_parent() {
+        #[cfg(windows)]
+        let current_dir = PathBuf::from(r"C:\Users\testuser\projects\rust");
+        #[cfg(not(windows))]
+        let current_dir = PathBuf::from("/home/testuser/projects/rust");
+
+        let parent = get_cwd_parent(&current_dir);
+
+        #[cfg(windows)]
+        assert_eq!(parent, r"C:\Users\testuser\projects");
+        #[cfg(not(windows))]
+        assert_eq!(parent, "/home/testuser/projects");
+    }
+
+    #[test]
+    fn test_cwd_home() {
+        let home = setup_home_dir();
+
+        // Test path inside home directory
+        #[cfg(windows)]
+        let current_dir = PathBuf::from(r"C:\Users\testuser\projects\rust");
+        #[cfg(not(windows))]
+        let current_dir = PathBuf::from("/home/testuser/projects/rust");
+
+        let relative_to_home = get_cwd_home(&current_dir);
+        assert_eq!(relative_to_home, "~/projects/rust");
+
+        // Test path outside home directory
+        #[cfg(windows)]
+        let outside_dir = PathBuf::from(r"D:\other\path");
+        #[cfg(not(windows))]
+        let outside_dir = PathBuf::from("/opt/other/path");
+
+        let outside_home = get_cwd_home(&outside_dir);
+
+        #[cfg(windows)]
+        assert_eq!(outside_home, r"D:\other\path");
+        #[cfg(not(windows))]
+        assert_eq!(outside_home, "/opt/other/path");
     }
 }

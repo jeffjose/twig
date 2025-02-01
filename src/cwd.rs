@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub enum CwdError {
@@ -58,10 +59,11 @@ fn get_cwd_variables(path: &std::path::Path) -> Result<HashMap<String, String>, 
         .unwrap_or_else(|| ".".to_string());
     vars.insert("cwd_short".to_string(), short_path);
 
-    // Future variables can be added here:
-    // vars.insert("cwd_parent".to_string(), ...);
-    // vars.insert("cwd_home_relative".to_string(), ...);
-    // vars.insert("cwd_git_root".to_string(), ...);
+    // Add parent directory variable
+    vars.insert("cwd_parent".to_string(), get_cwd_parent(path));
+
+    // Add home-relative path variable
+    vars.insert("cwd_home".to_string(), get_cwd_home(path));
 
     Ok(vars)
 }
@@ -101,4 +103,47 @@ impl VariableProvider for CwdProvider {
     fn section_name() -> &'static str {
         "cwd"
     }
+}
+
+pub fn get_cwd_parent(path: &Path) -> String {
+    path.parent()
+        .and_then(|p| p.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+pub fn get_cwd_home(path: &Path) -> String {
+    if let Ok(home) = env::var("HOME") {
+        let home_path = Path::new(&home);
+        if let Ok(stripped) = path.strip_prefix(home_path) {
+            return format!("~/{}", stripped.display());
+        }
+    }
+    path.to_string_lossy().into_owned()
+}
+
+// Update your existing format_cwd function to handle the new variables
+pub fn format_cwd(format: &str, path: &Path) -> String {
+    let mut result = format.to_string();
+
+    // Replace existing variables
+    if format.contains("{cwd}") {
+        result = result.replace("{cwd}", &path.to_string_lossy());
+    }
+    if format.contains("{cwd_short}") {
+        result = result.replace(
+            "{cwd_short}",
+            &path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+        );
+    }
+
+    // Add new variables
+    if format.contains("{cwd_parent}") {
+        result = result.replace("{cwd_parent}", &get_cwd_parent(path));
+    }
+    if format.contains("{cwd_home}") {
+        result = result.replace("{cwd_home}", &get_cwd_home(path));
+    }
+
+    result
 }

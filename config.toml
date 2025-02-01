@@ -27,11 +27,8 @@ name = "dir"
 # Available variables:
 # {cwd} - Full path to current directory
 # {cwd_short} - Current directory name only
-# Future variables:
 # {cwd_parent} - Parent directory
 # {cwd_home} - Path relative to home (~/)
-# {cwd_git} - Git repository root
-format = "{cwd_short}" # Shows only current directory name
 
 [prompt]
 # Available variables with optional colors:
