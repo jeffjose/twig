@@ -34,27 +34,16 @@ name = "dir"
 # {cwd_home} - Path relative to home (~/)
 
 [[git]]
-name = "git_status"
-# Available variables:
-# {git_branch}      - Current branch name (e.g., "main", "develop")
-# {git_state}       - Special states (MERGING, REBASING, etc)
-# {git_changes}     - Staged/unstaged indicator (*+n)
-# {git_staged}      - Number of staged files
-# {git_unstaged}    - Number of unstaged files
-# {git_untracked}   - ? if has untracked files
-# {git_remote}      - Remote status (↑n,↓n)
-# {git_ahead}       - Commits ahead of remote
-# {git_behind}      - Commits behind remote
-# {git_stash}       - Stash indicator ($n)
-# {git_stash_count} - Number of stashes
-
-# Examples:
-# format = "{git_branch}✓"                     # Clean branch: main✓
-# format = "{git_branch}{git_changes}"         # With changes: main*+2
-# format = "{git_branch}{git_remote}"          # Remote status: main↑3
-# format = "{git_branch}{git_state}"           # During merge: mainMERGING
-format = "{git_branch}{git_state}{git_changes}{git_remote}{git_stash}"
-error = "⚠️"                                                           # Used when git commands fail
+name = "status"
+# This format shows:
+# - Branch name (git_branch)
+# - Unstaged changes indicator (*) via git_changes
+# - Staged changes count (+n) via git_changes
+# - Remote status (↑n,↓n) via git_remote
+# - Stash indicator ($n) via git_stash
+# - Untracked files indicator (?) via git_untracked
+format = "[{git_branch} {git_changes}{git_remote}{git_stash}{git_untracked}]"
+error = "⚠️"
 
 [prompt]
 # Available variables with optional colors:
@@ -63,10 +52,9 @@ error = "⚠️"                                                           # Use
 # Colors: red, green, yellow, blue, magenta, cyan, white
 #         bright_red, bright_green, bright_yellow, bright_blue,
 #         bright_magenta, bright_cyan, bright_white
-# Multi-line format example
 format = """
 -----
--({time:cyan} {$HOST:magenta} {hostname:magenta} {local:magenta} {dir:green} {$USER:yellow} {git_status:yellow})-
+-({time:cyan} {$HOST:magenta} {hostname:magenta} {local:magenta} {dir:green} {$USER:yellow} {status:yellow})-
 # 
 -----
 """
