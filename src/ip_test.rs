@@ -19,8 +19,10 @@ mod tests {
         // IP should be parseable and valid
         let ip_str = result.unwrap();
         let ip: IpAddr = ip_str.parse().expect("Should be valid IP address");
+        assert!(!ip_str.is_empty());  // Shouldn't be empty
+        assert!(!ip_str.contains(' '));  // Shouldn't contain spaces
+        assert!(!ip.is_multicast());  // Shouldn't be multicast
         assert!(!ip.is_unspecified());  // Shouldn't be 0.0.0.0
-        assert!(!ip.is_multicast());    // Shouldn't be multicast
     }
 
     #[test]

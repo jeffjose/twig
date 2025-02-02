@@ -1,10 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use crate::cwd::{Config, CwdProvider};
+    use crate::cwd::{get_cwd_home, get_cwd_parent, Config, CwdProvider};
     use crate::variable::{ConfigWithName, VariableProvider};
     use std::env;
     use std::fs;
-    use std::path::PathBuf;
     use std::path::{Path, PathBuf};
 
     fn setup_home_dir() -> PathBuf {

@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use crate::variable::{ConfigWithName, VariableProvider};
 use std::collections::HashMap;
-use std::net::IpAddr;
-use local_ip_address::local_ip;
 use std::process::Command;
 
 #[derive(Debug)]
@@ -44,7 +42,7 @@ fn default_error() -> String {
     String::new()
 }
 
-fn get_hostname_variables() -> Result<HashMap<String, String>, HostnameError> {
+pub fn get_hostname_variables() -> Result<HashMap<String, String>, HostnameError> {
     let mut vars = HashMap::new();
 
     // Get basic hostname

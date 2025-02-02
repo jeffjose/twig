@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::hostname::{Config, HostnameProvider, HostnameError};
+    use crate::hostname::{get_hostname, get_hostname_variables};
     use crate::variable::{VariableProvider, ConfigWithName};
 
     #[test]
@@ -59,7 +60,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hostname_format() {
+    fn test_hostname_format_basic() {
         let config = Config {
             name: Some("host".to_string()),
             format: "{hostname}".to_string(),
@@ -196,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hostname_format() {
+    fn test_hostname_format_with_fqdn() {
         let config = Config {
             format: "HOST={hostname} FQDN={fqdn}".to_string(),
             ..Default::default()

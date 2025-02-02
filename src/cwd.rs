@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug)]
 pub enum CwdError {
