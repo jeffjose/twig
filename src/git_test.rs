@@ -8,7 +8,6 @@ mod tests {
 
     fn setup_test_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let original_dir = env::current_dir().unwrap();
 
         env::set_current_dir(&dir).unwrap();
 

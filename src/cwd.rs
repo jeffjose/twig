@@ -1,4 +1,4 @@
-use crate::variable::{replace_variables, ConfigWithName, LazyVariables, VariableProvider};
+use crate::variable::{ConfigWithName, LazyVariables, VariableProvider, replace_variables};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
@@ -46,7 +46,14 @@ impl VariableProvider for CwdProvider {
     type Config = Config;
 
     fn get_value(config: &Self::Config) -> Result<String, Self::Error> {
-        get_cwd(config)
+        // If the format string doesn't contain any variables, return as-is
+        if !config.format.contains('{') {
+            return Ok(config.format.clone());
+        }
+
+        // Get all needed variables using LazyVariables trait
+        let vars = Self::get_needed_variables(&config.format)?;
+        Ok(replace_variables(&config.format, &vars))
     }
 
     fn section_name() -> &'static str {
@@ -82,15 +89,6 @@ impl LazyVariables for CwdProvider {
     fn variable_names() -> &'static [&'static str] {
         &["cwd", "cwd_short", "cwd_parent", "cwd_home"]
     }
-}
-
-pub fn get_cwd(config: &Config) -> Result<String, CwdError> {
-    if !config.format.contains('{') {
-        return Ok(config.format.clone());
-    }
-
-    let vars = CwdProvider::get_needed_variables(&config.format)?;
-    Ok(replace_variables(&config.format, &vars))
 }
 
 impl ConfigWithName for Config {

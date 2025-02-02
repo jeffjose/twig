@@ -1,4 +1,4 @@
-use crate::variable::{ConfigWithName, LazyVariables, VariableProvider};
+use crate::variable::{replace_variables, ConfigWithName, LazyVariables, VariableProvider};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
@@ -93,12 +93,19 @@ impl VariableProvider for GitProvider {
     type Config = Config;
 
     fn get_value(config: &Self::Config) -> Result<String, Self::Error> {
+        // Skip if not in a git repo
         if !is_git_repo()? {
             return Ok(String::new());
         }
 
+        // If the format string doesn't contain any variables, return as-is
+        if !config.format.contains('{') {
+            return Ok(String::new());
+        }
+
+        // Get all needed variables using LazyVariables trait
         let vars = Self::get_needed_variables(&config.format)?;
-        Ok(crate::variable::replace_variables(&config.format, &vars))
+        Ok(replace_variables(&config.format, &vars))
     }
 
     fn section_name() -> &'static str {
@@ -119,9 +126,13 @@ fn run_git(args: &[&str]) -> Result<String, GitError> {
                     .map(|s| s.trim().to_string())
                     .map_err(|e| GitError::ParseError(e.to_string()))
             } else {
-                Err(GitError::CommandFailed(
-                    String::from_utf8_lossy(&output.stderr).to_string(),
-                ))
+                // Check if the error indicates this isn't a git repo
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if stderr.contains("not a git repository") {
+                    Err(GitError::NotGitRepo)
+                } else {
+                    Err(GitError::CommandFailed(stderr.to_string()))
+                }
             }
         })
 }
@@ -130,6 +141,7 @@ fn is_git_repo() -> Result<bool, GitError> {
     match run_git(&["rev-parse", "--is-inside-work-tree"]) {
         Ok(_) => Ok(true),
         Err(GitError::CommandFailed(_)) => Ok(false),
+        Err(GitError::NotGitRepo) => Ok(false),
         Err(e) => Err(e),
     }
 }
@@ -141,7 +153,7 @@ fn get_branch() -> Result<String, GitError> {
 
 fn get_repo_state() -> Result<String, GitError> {
     let git_dir = run_git(&["rev-parse", "--git-dir"])?;
-    
+
     // Check various state files
     let states = [
         ("MERGE_HEAD", "MERGING"),
@@ -163,7 +175,7 @@ fn get_repo_state() -> Result<String, GitError> {
 fn get_changes_indicator() -> Result<String, GitError> {
     let staged = get_staged_count()?;
     let unstaged = get_unstaged_count()?;
-    
+
     let mut indicator = String::new();
     if unstaged > 0 || staged > 0 {
         indicator.push(' ');
@@ -175,7 +187,7 @@ fn get_changes_indicator() -> Result<String, GitError> {
             indicator.push_str(&staged.to_string());
         }
     }
-    
+
     Ok(indicator)
 }
 
@@ -204,31 +216,33 @@ fn get_remote_status() -> Result<String, GitError> {
         Ok(_) => {
             let ahead = get_ahead_count()?;
             let behind = get_behind_count()?;
-            
+
             match (ahead, behind) {
                 (0, 0) => Ok(String::new()),
                 (a, 0) => Ok(format!(" ↑{}", a)),
                 (0, b) => Ok(format!(" ↓{}", b)),
                 (a, b) => Ok(format!(" ↕{},{}", a, b)),
             }
-        },
-        Err(_) => Ok(String::new()) // No upstream branch
+        }
+        Err(_) => Ok(String::new()), // No upstream branch
     }
 }
 
 fn get_ahead_count() -> Result<usize, GitError> {
     match run_git(&["rev-list", "@{u}..HEAD", "--count"]) {
-        Ok(count) => count.parse::<usize>()
+        Ok(count) => count
+            .parse::<usize>()
             .map_err(|e: std::num::ParseIntError| GitError::ParseError(e.to_string())),
-        Err(_) => Ok(0)  // Handle case when no upstream exists
+        Err(_) => Ok(0), // Handle case when no upstream exists
     }
 }
 
 fn get_behind_count() -> Result<usize, GitError> {
     match run_git(&["rev-list", "HEAD..@{u}", "--count"]) {
-        Ok(count) => count.parse::<usize>()
+        Ok(count) => count
+            .parse::<usize>()
             .map_err(|e: std::num::ParseIntError| GitError::ParseError(e.to_string())),
-        Err(_) => Ok(0)  // Handle case when no upstream exists
+        Err(_) => Ok(0), // Handle case when no upstream exists
     }
 }
 
@@ -244,4 +258,4 @@ fn get_stash_indicator() -> Result<String, GitError> {
 fn get_stash_count() -> Result<usize, GitError> {
     let stash = run_git(&["stash", "list"])?;
     Ok(stash.lines().count())
-} 
+}

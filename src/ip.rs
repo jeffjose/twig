@@ -1,6 +1,6 @@
+use crate::variable::{replace_variables, ConfigWithName, LazyVariables, VariableProvider};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use crate::variable::{replace_variables, ConfigWithName, LazyVariables, VariableProvider};
 
 #[derive(Debug)]
 pub enum IpConfigError {
@@ -28,7 +28,7 @@ pub struct Config {
 }
 
 fn default_format() -> String {
-    "{ip}".to_string()  // Default format using {ip} variable
+    "{ip}".to_string() // Default format using {ip} variable
 }
 
 fn default_error() -> String {
@@ -48,7 +48,7 @@ pub struct IpProvider;
 
 impl LazyVariables for IpProvider {
     type Error = IpConfigError;
-    
+
     fn get_variable(name: &str) -> Result<String, Self::Error> {
         match name {
             "ip" => {
@@ -59,19 +59,10 @@ impl LazyVariables for IpProvider {
             _ => Err(IpConfigError::Lookup("Unknown variable".to_string())),
         }
     }
-    
+
     fn variable_names() -> &'static [&'static str] {
         &["ip"]
     }
-}
-
-pub fn get_ip_str(config: &Config) -> Result<String, IpConfigError> {
-    if !config.format.contains('{') {
-        return Ok(config.format.clone());
-    }
-
-    let vars = IpProvider::get_needed_variables(&config.format)?;
-    Ok(replace_variables(&config.format, &vars))
 }
 
 impl VariableProvider for IpProvider {
@@ -79,10 +70,17 @@ impl VariableProvider for IpProvider {
     type Config = Config;
 
     fn get_value(config: &Self::Config) -> Result<String, Self::Error> {
-        get_ip_str(config)
+        // If the format string doesn't contain any variables, return as-is
+        if !config.format.contains('{') {
+            return Ok(config.format.clone());
+        }
+
+        // Get all needed variables using LazyVariables trait
+        let vars = Self::get_needed_variables(&config.format)?;
+        Ok(replace_variables(&config.format, &vars))
     }
 
     fn section_name() -> &'static str {
         "ip"
     }
-} 
+}

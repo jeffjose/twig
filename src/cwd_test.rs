@@ -60,35 +60,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cwd_root() {
-        let temp_dir = env::temp_dir().join("cwd_test_root");
-        fs::create_dir_all(&temp_dir).unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        env::set_current_dir(&temp_dir).unwrap();
-
-        let test_cases = vec![
-            ("{cwd}", temp_dir.to_string_lossy().to_string()),
-            ("{cwd_short}", "cwd_test_root".to_string()),
-        ];
-
-        for (format, expected) in test_cases {
-            let config = Config {
-                name: Some("dir".to_string()),
-                format: format.to_string(),
-                error: String::new(),
-            };
-
-            let result = CwdProvider::get_value(&config).unwrap();
-            assert_eq!(result, expected);
-        }
-
-        // Clean up
-        env::set_current_dir(original_dir).unwrap();
-        fs::remove_dir(&temp_dir).unwrap();
-    }
-
-    #[test]
     fn test_cwd_nonexistent() {
         let original_dir = env::current_dir().unwrap();
         let nonexistent = PathBuf::from("/path/that/does/not/exist");

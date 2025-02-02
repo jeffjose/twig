@@ -1,6 +1,7 @@
+use crate::template::format_template;
+use std::collections::HashMap;
 use std::error::Error;
 use std::time::Duration;
-use std::collections::HashMap;
 
 // Common trait for all variable providers
 pub trait VariableProvider {
@@ -26,35 +27,75 @@ pub struct ProcessingResult {
 // Add this new trait for lazy variable evaluation
 pub trait LazyVariables {
     type Error;
-    
+
     // Get a specific variable's value
     fn get_variable(name: &str) -> Result<String, Self::Error>;
-    
+
     // List available variable names
     fn variable_names() -> &'static [&'static str];
-    
+
     // Default implementation for getting only needed variables
     fn get_needed_variables(format: &str) -> Result<HashMap<String, String>, Self::Error> {
         let mut vars = HashMap::new();
-        
+
+        // Check each variable name
         for &var_name in Self::variable_names() {
-            let var_pattern = format!("{{{}}}", var_name);
-            if format.contains(&var_pattern) {
+            // Look for both colored and uncolored variants
+            let plain_pattern = format!("{{{}}}", var_name);
+            let colored_pattern = format!("{{{}:", var_name);
+
+            if format.contains(&plain_pattern) || format.contains(&colored_pattern) {
                 vars.insert(var_name.to_string(), Self::get_variable(var_name)?);
             }
         }
-        
+
         Ok(vars)
     }
 }
 
-// Add helper function for variable replacement
+// Update helper function for variable replacement to handle colors
 pub fn replace_variables(format: &str, vars: &HashMap<String, String>) -> String {
-    let mut result = format.to_string();
-    for (name, value) in vars {
-        result = result.replace(&format!("{{{}}}", name), value);
+    let mut var_specs = Vec::new(); // Store the variable specifications and values
+    let mut chars = format.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            let mut var_spec = String::new();
+            let mut found_closing = false;
+
+            while let Some(&next_char) = chars.peek() {
+                if next_char == '}' {
+                    found_closing = true;
+                    chars.next();
+                    break;
+                }
+                var_spec.push(chars.next().unwrap());
+            }
+
+            if found_closing && !var_spec.is_empty() {
+                // Split variable name and color
+                let var_name = if let Some(colon_pos) = var_spec.find(':') {
+                    var_spec[..colon_pos].to_string()
+                } else {
+                    var_spec.clone()
+                };
+
+                // If we have a value for this variable, store both name and value
+                if let Some(value) = vars.get(&var_name) {
+                    var_specs.push((var_name, value.clone()));
+                }
+            }
+        }
     }
-    result
+
+    // Create a vector of references with the correct types for format_template
+    let var_refs: Vec<(&str, &str)> = var_specs
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+
+    // Use template formatter to handle both variable replacement and colors
+    format_template(&format, &var_refs, false, None).unwrap_or_else(|_| format.to_string())
 }
 
 // Helper function to process a section's variables
@@ -79,8 +120,11 @@ pub async fn process_section<P: VariableProvider>(
         let var_name = get_var_name(config, P::section_name(), i);
         debug_variable_usage(format, P::section_name(), &var_name, validate);
 
-        // Only process if variable is actually used in format
-        if format_uses_variable(format, &var_name) {
+        // Check for both colored and uncolored variants
+        let plain_pattern = format!("{{{}}}", var_name);
+        let colored_pattern = format!("{{{}:", var_name);
+
+        if format.contains(&plain_pattern) || format.contains(&colored_pattern) {
             let value = match P::get_value(config) {
                 Ok(val) => val,
                 Err(e) => {
@@ -100,8 +144,11 @@ pub async fn process_section<P: VariableProvider>(
     }
 }
 
+// Update format_uses_variable to check for both variants
 pub fn format_uses_variable(format: &str, var_name: &str) -> bool {
-    format.contains(&format!("{{{}}}", var_name)) || format.contains(&format!("{{{}:", var_name))
+    let plain_pattern = format!("{{{}}}", var_name);
+    let colored_pattern = format!("{{{}:", var_name);
+    format.contains(&plain_pattern) || format.contains(&colored_pattern)
 }
 
 pub fn debug_variable_usage(format: &str, section: &str, var_name: &str, validate: bool) {
@@ -128,4 +175,4 @@ pub fn get_var_name<T: ConfigWithName>(config: &T, section_name: &str, index: us
             format!("{}_{}", section_name, index + 1)
         }
     })
-} 
+}

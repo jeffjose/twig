@@ -37,15 +37,6 @@ fn default_error() -> String {
     String::new()
 }
 
-pub fn get_hostname(config: &Config) -> Result<String, HostnameError> {
-    if !config.format.contains('{') {
-        return Ok(config.format.clone());
-    }
-
-    let vars = HostnameProvider::get_needed_variables(&config.format)?;
-    Ok(replace_variables(&config.format, &vars))
-}
-
 impl ConfigWithName for Config {
     fn name(&self) -> Option<&str> {
         self.name.as_deref()
@@ -62,7 +53,14 @@ impl VariableProvider for HostnameProvider {
     type Config = Config;
 
     fn get_value(config: &Self::Config) -> Result<String, Self::Error> {
-        get_hostname(config)
+        // If the format string doesn't contain any variables, return as-is
+        if !config.format.contains('{') {
+            return Ok(config.format.clone());
+        }
+
+        // Get all needed variables using LazyVariables trait
+        let vars = Self::get_needed_variables(&config.format)?;
+        Ok(replace_variables(&config.format, &vars))
     }
 
     fn section_name() -> &'static str {
