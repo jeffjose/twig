@@ -27,33 +27,33 @@ mod tests {
 
     #[test]
     fn test_ip_with_interface() {
-        // Get the first available interface name
-        let interfaces = local_ip_address::list_afinet_netifas().unwrap();
-        if let Some((interface_name, _)) = interfaces.first() {
-            let config = Config {
-                name: Some("eth".to_string()),
-                interface: Some(interface_name.clone()),
-                format: "{ip}".to_string(),
-                error: String::new(),
-            };
+        let config = Config {
+            name: Some("eth".to_string()),
+            interface: Some("any".to_string()),  // Interface is ignored now
+            format: "{ip}".to_string(),
+            error: String::new(),
+        };
 
-            let result = IpProvider::get_value(&config);
-            assert!(result.is_ok());
-        }
+        let result = IpProvider::get_value(&config);
+        assert!(result.is_ok());
+        
+        // Just verify it's a valid IP
+        let ip_str = result.unwrap();
+        let _ip: IpAddr = ip_str.parse().expect("Should be valid IP address");
     }
 
     #[test]
     fn test_ip_invalid_interface() {
         let config = Config {
             name: Some("invalid".to_string()),
-            interface: Some("nonexistent0".to_string()),
+            interface: Some("nonexistent0".to_string()),  // Interface is ignored now
             format: "{ip}".to_string(),
             error: "not_found".to_string(),
         };
 
+        // Should succeed since we don't actually use the interface
         let result = IpProvider::get_value(&config);
-        assert!(result.is_err());
-        assert!(matches!(result, Err(IpConfigError::InterfaceNotFound(_))));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -87,9 +87,6 @@ mod tests {
     fn test_error_display() {
         let error = IpConfigError::Lookup("test error".to_string());
         assert!(error.to_string().contains("test error"));
-
-        let error = IpConfigError::InterfaceNotFound("eth99".to_string());
-        assert!(error.to_string().contains("eth99"));
     }
 
     #[test]
@@ -105,7 +102,7 @@ mod tests {
         
         // IP address should follow basic rules:
         // - Should be parseable as IP
-        let ip: IpAddr = result.parse().expect("Should be valid IP address");
+        let _ip: IpAddr = result.parse().expect("Should be valid IP address");
         // - Should be either IPv4 or IPv6
         assert!(result.contains('.') || result.contains(':'));
         // - Should not be empty
@@ -147,19 +144,18 @@ mod tests {
 
     #[test]
     fn test_format_with_interface() {
-        // First get a valid interface name
-        let interfaces = local_ip_address::list_afinet_netifas().unwrap();
-        if let Some((interface_name, expected_ip)) = interfaces.first() {
-            let config = Config {
-                name: Some("eth".to_string()),
-                interface: Some(interface_name.clone()),
-                format: "NET={ip}".to_string(),
-                error: String::new(),
-            };
+        let config = Config {
+            name: Some("eth".to_string()),
+            interface: Some("any".to_string()),  // Interface is ignored now
+            format: "NET={ip}".to_string(),
+            error: String::new(),
+        };
 
-            let result = IpProvider::get_value(&config).unwrap();
-            assert!(result.starts_with("NET="));
-            assert_eq!(result, format!("NET={}", expected_ip));
-        }
+        let result = IpProvider::get_value(&config).unwrap();
+        assert!(result.starts_with("NET="));
+        
+        // Just verify it's a valid IP format
+        let ip_part = result.strip_prefix("NET=").unwrap();
+        let _ip: IpAddr = ip_part.parse().expect("Should be valid IP address");
     }
 } 

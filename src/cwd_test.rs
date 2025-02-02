@@ -4,7 +4,7 @@ mod tests {
     use crate::variable::{ConfigWithName, VariableProvider};
     use std::env;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     fn setup_home_dir() -> PathBuf {
         #[cfg(windows)]
@@ -153,9 +153,8 @@ mod tests {
 
     #[test]
     fn test_cwd_home() {
-        let home = setup_home_dir();
-
-        // Test path inside home directory
+        let _home = setup_home_dir(); // Prefix with underscore since we need the side effect
+                                      // Test path inside home directory
         #[cfg(windows)]
         let current_dir = PathBuf::from(r"C:\Users\testuser\projects\rust");
         #[cfg(not(windows))]

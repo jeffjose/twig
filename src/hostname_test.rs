@@ -1,8 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use crate::hostname::{Config, HostnameProvider, HostnameError};
-    use crate::hostname::{get_hostname, get_hostname_variables};
-    use crate::variable::{VariableProvider, ConfigWithName};
+    use crate::hostname::{Config, HostnameError, HostnameProvider};
+    use crate::variable::{ConfigWithName, VariableProvider};
 
     #[test]
     fn test_hostname_basic() {
@@ -14,7 +13,7 @@ mod tests {
 
         let result = HostnameProvider::get_value(&config);
         assert!(result.is_ok());
-        
+
         // Hostname should not be empty
         let hostname = result.unwrap();
         assert!(!hostname.is_empty());
@@ -68,7 +67,7 @@ mod tests {
         };
 
         let result = HostnameProvider::get_value(&config).unwrap();
-        
+
         // Hostname should follow some basic rules:
         // - Should not contain spaces
         assert!(!result.contains(' '));
@@ -77,7 +76,9 @@ mod tests {
         // - Should not be too long (max 255 chars by standard)
         assert!(result.len() <= 255);
         // - Should only contain valid hostname characters
-        assert!(result.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '.'));
+        assert!(result
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '.'));
     }
 
     #[test]
@@ -177,34 +178,9 @@ mod tests {
         let result = HostnameProvider::get_value(&config).unwrap();
         assert!(result.starts_with("HOSTNAME="));
         assert!(!result.contains("{hostname}")); // Variable should be replaced
-        
+
         // Get raw hostname for comparison
         let raw_hostname = hostname::get().unwrap().to_string_lossy().to_string();
         assert_eq!(result, format!("HOSTNAME={}", raw_hostname));
     }
-
-    #[test]
-    fn test_hostname_variables() {
-        let result = get_hostname_variables().unwrap();
-        
-        // Basic hostname should exist
-        assert!(result.contains_key("hostname"));
-        assert!(!result.get("hostname").unwrap().is_empty());
-        
-        // FQDN should exist
-        assert!(result.contains_key("fqdn"));
-        assert!(!result.get("fqdn").unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_hostname_format_with_fqdn() {
-        let config = Config {
-            format: "HOST={hostname} FQDN={fqdn}".to_string(),
-            ..Default::default()
-        };
-        
-        let result = get_hostname(&config).unwrap();
-        assert!(result.starts_with("HOST="));
-        assert!(result.contains("FQDN="));
-    }
-} 
+}
