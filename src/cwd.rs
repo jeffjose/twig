@@ -1,6 +1,5 @@
-use crate::variable::{ConfigWithName, VariableProvider};
+use crate::variable::{replace_variables, ConfigWithName, LazyVariables, VariableProvider};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
@@ -40,56 +39,6 @@ fn default_error() -> String {
     String::new()
 }
 
-// Helper function to get all available variables for the current path
-fn get_cwd_variables(path: &std::path::Path) -> Result<HashMap<String, String>, CwdError> {
-    let mut vars = HashMap::new();
-
-    // Full path
-    let full_path = path
-        .to_str()
-        .map(String::from)
-        .ok_or_else(|| CwdError::ToString(path.to_path_buf().into_os_string()))?;
-    vars.insert("cwd".to_string(), full_path);
-
-    // Short version (current directory name)
-    let short_path = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(String::from)
-        .unwrap_or_else(|| ".".to_string());
-    vars.insert("cwd_short".to_string(), short_path);
-
-    // Add parent directory variable
-    vars.insert("cwd_parent".to_string(), get_cwd_parent(path));
-
-    // Add home-relative path variable
-    vars.insert("cwd_home".to_string(), get_cwd_home(path));
-
-    Ok(vars)
-}
-
-pub fn get_cwd(config: &Config) -> Result<String, CwdError> {
-    let path = env::current_dir().map_err(CwdError::GetCwd)?;
-    let vars = get_cwd_variables(&path)?;
-
-    // Replace all variables in the format string
-    let mut result = config.format.clone();
-    for (var_name, value) in vars {
-        result = result.replace(&format!("{{{}}}", var_name), &value);
-    }
-
-    Ok(result)
-}
-
-impl ConfigWithName for Config {
-    fn name(&self) -> Option<&str> {
-        self.name.as_deref()
-    }
-    fn error(&self) -> &str {
-        &self.error
-    }
-}
-
 pub struct CwdProvider;
 
 impl VariableProvider for CwdProvider {
@@ -102,6 +51,54 @@ impl VariableProvider for CwdProvider {
 
     fn section_name() -> &'static str {
         "cwd"
+    }
+}
+
+impl LazyVariables for CwdProvider {
+    type Error = CwdError;
+
+    fn get_variable(name: &str) -> Result<String, Self::Error> {
+        let path = env::current_dir().map_err(CwdError::GetCwd)?;
+
+        match name {
+            "cwd" => path
+                .to_str()
+                .map(String::from)
+                .ok_or_else(|| CwdError::ToString(path.to_path_buf().into_os_string())),
+            "cwd_short" => Ok(path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(String::from)
+                .unwrap_or_else(|| ".".to_string())),
+            "cwd_parent" => Ok(get_cwd_parent(&path)),
+            "cwd_home" => Ok(get_cwd_home(&path)),
+            _ => Err(CwdError::GetCwd(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Unknown variable",
+            ))),
+        }
+    }
+
+    fn variable_names() -> &'static [&'static str] {
+        &["cwd", "cwd_short", "cwd_parent", "cwd_home"]
+    }
+}
+
+pub fn get_cwd(config: &Config) -> Result<String, CwdError> {
+    if !config.format.contains('{') {
+        return Ok(config.format.clone());
+    }
+
+    let vars = CwdProvider::get_needed_variables(&config.format)?;
+    Ok(replace_variables(&config.format, &vars))
+}
+
+impl ConfigWithName for Config {
+    fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+    fn error(&self) -> &str {
+        &self.error
     }
 }
 
@@ -120,30 +117,4 @@ pub fn get_cwd_home(path: &Path) -> String {
         }
     }
     path.to_string_lossy().into_owned()
-}
-
-// Update your existing format_cwd function to handle the new variables
-pub fn format_cwd(format: &str, path: &Path) -> String {
-    let mut result = format.to_string();
-
-    // Replace existing variables
-    if format.contains("{cwd}") {
-        result = result.replace("{cwd}", &path.to_string_lossy());
-    }
-    if format.contains("{cwd_short}") {
-        result = result.replace(
-            "{cwd_short}",
-            &path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-        );
-    }
-
-    // Add new variables
-    if format.contains("{cwd_parent}") {
-        result = result.replace("{cwd_parent}", &get_cwd_parent(path));
-    }
-    if format.contains("{cwd_home}") {
-        result = result.replace("{cwd_home}", &get_cwd_home(path));
-    }
-
-    result
 }

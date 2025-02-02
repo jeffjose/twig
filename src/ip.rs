@@ -1,20 +1,16 @@
-use local_ip_address::list_afinet_netifas;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use std::net::IpAddr;
-use crate::variable::{ConfigWithName, VariableProvider};
+use crate::variable::{replace_variables, ConfigWithName, LazyVariables, VariableProvider};
 
 #[derive(Debug)]
 pub enum IpConfigError {
     Lookup(String),
-    InterfaceNotFound(String),
 }
 
 impl std::fmt::Display for IpConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IpConfigError::Lookup(e) => write!(f, "Failed to get IP address: {}", e),
-            IpConfigError::InterfaceNotFound(iface) => write!(f, "Interface not found: {}", iface),
         }
     }
 }
@@ -39,31 +35,6 @@ fn default_error() -> String {
     String::new()
 }
 
-pub fn get_ip(config: &Config) -> Result<IpAddr, IpConfigError> {
-    let raw_ip = match &config.interface {
-        Some(interface) => {
-            // Get all network interfaces
-            let interfaces = list_afinet_netifas()
-                .map_err(|e| IpConfigError::Lookup(e.to_string()))?;
-
-            // Find the requested interface
-            interfaces
-                .iter()
-                .find(|(name, _)| name == interface)
-                .map(|(_, addr)| *addr)
-                .ok_or_else(|| IpConfigError::InterfaceNotFound(interface.clone()))?
-        }
-        None => {
-            // Default behavior: get the default local IP
-            local_ip_address::local_ip()
-                .map_err(|e| IpConfigError::Lookup(e.to_string()))?
-        }
-    };
-
-    // Format the IP using the format string
-    Ok(raw_ip)
-}
-
 impl ConfigWithName for Config {
     fn name(&self) -> Option<&str> {
         self.name.as_deref()
@@ -75,13 +46,40 @@ impl ConfigWithName for Config {
 
 pub struct IpProvider;
 
+impl LazyVariables for IpProvider {
+    type Error = IpConfigError;
+    
+    fn get_variable(name: &str) -> Result<String, Self::Error> {
+        match name {
+            "ip" => {
+                let ip = local_ip_address::local_ip()
+                    .map_err(|e| IpConfigError::Lookup(e.to_string()))?;
+                Ok(ip.to_string())
+            }
+            _ => Err(IpConfigError::Lookup("Unknown variable".to_string())),
+        }
+    }
+    
+    fn variable_names() -> &'static [&'static str] {
+        &["ip"]
+    }
+}
+
+pub fn get_ip_str(config: &Config) -> Result<String, IpConfigError> {
+    if !config.format.contains('{') {
+        return Ok(config.format.clone());
+    }
+
+    let vars = IpProvider::get_needed_variables(&config.format)?;
+    Ok(replace_variables(&config.format, &vars))
+}
+
 impl VariableProvider for IpProvider {
     type Error = IpConfigError;
     type Config = Config;
 
     fn get_value(config: &Self::Config) -> Result<String, Self::Error> {
-        let ip = get_ip(config)?;
-        Ok(config.format.replace("{ip}", &ip.to_string()))
+        get_ip_str(config)
     }
 
     fn section_name() -> &'static str {

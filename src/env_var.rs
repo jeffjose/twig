@@ -1,4 +1,4 @@
-use crate::variable::{ConfigWithName, VariableProvider};
+use crate::variable::{ConfigWithName, VariableProvider, LazyVariables};
 use std::env;
 use std::error::Error;
 use std::fmt;
@@ -35,13 +35,30 @@ impl ConfigWithName for Config {
 
 pub struct EnvProvider;
 
+impl LazyVariables for EnvProvider {
+    type Error = EnvError;
+    
+    fn get_variable(name: &str) -> Result<String, Self::Error> {
+        let var_name = if name.starts_with('$') {
+            &name[1..]
+        } else {
+            name
+        };
+        env::var(var_name).map_err(|_| EnvError::NotFound(var_name.to_string()))
+    }
+    
+    fn variable_names() -> &'static [&'static str] {
+        &[] // Dynamic variables from environment
+    }
+}
+
 impl VariableProvider for EnvProvider {
     type Error = EnvError;
     type Config = Config;
 
     fn get_value(config: &Self::Config) -> Result<String, Self::Error> {
         let var_name = config.name.strip_prefix('$').unwrap_or(&config.name);
-        env::var(var_name).map_err(|_| EnvError::NotFound(var_name.to_string()))
+        Self::get_variable(var_name)
     }
 
     fn section_name() -> &'static str {

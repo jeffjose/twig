@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::time::Duration;
+use std::collections::HashMap;
 
 // Common trait for all variable providers
 pub trait VariableProvider {
@@ -22,6 +23,40 @@ pub struct ProcessingResult {
     pub duration: Duration,
 }
 
+// Add this new trait for lazy variable evaluation
+pub trait LazyVariables {
+    type Error;
+    
+    // Get a specific variable's value
+    fn get_variable(name: &str) -> Result<String, Self::Error>;
+    
+    // List available variable names
+    fn variable_names() -> &'static [&'static str];
+    
+    // Default implementation for getting only needed variables
+    fn get_needed_variables(format: &str) -> Result<HashMap<String, String>, Self::Error> {
+        let mut vars = HashMap::new();
+        
+        for &var_name in Self::variable_names() {
+            let var_pattern = format!("{{{}}}", var_name);
+            if format.contains(&var_pattern) {
+                vars.insert(var_name.to_string(), Self::get_variable(var_name)?);
+            }
+        }
+        
+        Ok(vars)
+    }
+}
+
+// Add helper function for variable replacement
+pub fn replace_variables(format: &str, vars: &HashMap<String, String>) -> String {
+    let mut result = format.to_string();
+    for (name, value) in vars {
+        result = result.replace(&format!("{{{}}}", name), value);
+    }
+    result
+}
+
 // Helper function to process a section's variables
 pub async fn process_section<P: VariableProvider>(
     configs: &[P::Config],
@@ -32,10 +67,19 @@ pub async fn process_section<P: VariableProvider>(
     let start = Instant::now();
     let mut variables = Vec::new();
 
+    // Skip entire section if format doesn't contain any variables
+    if !format.contains('{') {
+        return ProcessingResult {
+            variables,
+            duration: start.elapsed(),
+        };
+    }
+
     for (i, config) in configs.iter().enumerate() {
         let var_name = get_var_name(config, P::section_name(), i);
         debug_variable_usage(format, P::section_name(), &var_name, validate);
 
+        // Only process if variable is actually used in format
         if format_uses_variable(format, &var_name) {
             let value = match P::get_value(config) {
                 Ok(val) => val,

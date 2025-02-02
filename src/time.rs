@@ -1,6 +1,6 @@
 use chrono::{format::ParseError, Local};
 use serde::{Deserialize, Serialize};
-use crate::variable::{ConfigWithName, VariableProvider};
+use crate::variable::{ConfigWithName, VariableProvider, LazyVariables};
 
 #[derive(Deserialize, Serialize, Default)]
 pub struct Config {
@@ -22,8 +22,23 @@ impl ConfigWithName for Config {
 
 pub struct TimeProvider;
 
+impl LazyVariables for TimeProvider {
+    type Error = ParseError;
+    
+    fn get_variable(name: &str) -> Result<String, Self::Error> {
+        match name {
+            "time" => Ok(Local::now().format("%H:%M:%S").to_string()),
+            _ => Ok(Local::now().format(name).to_string()), // Treat unknown as format string
+        }
+    }
+    
+    fn variable_names() -> &'static [&'static str] {
+        &["time"] // Basic variable, but format strings are handled directly
+    }
+}
+
 impl VariableProvider for TimeProvider {
-    type Error = chrono::format::ParseError;
+    type Error = ParseError;
     type Config = Config;
 
     fn get_value(config: &Self::Config) -> Result<String, Self::Error> {
@@ -44,5 +59,9 @@ fn default_error() -> String {
 }
 
 pub fn format_current_time(format: &str) -> Result<String, ParseError> {
+    // Skip if no format specifiers
+    if !format.contains('%') {
+        return Ok(format.to_string());
+    }
     Ok(Local::now().format(format).to_string())
 }
