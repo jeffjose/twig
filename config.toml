@@ -33,6 +33,29 @@ name = "dir"
 # {cwd_parent} - Parent directory
 # {cwd_home} - Path relative to home (~/)
 
+[[git]]
+name = "git_status"
+# Available variables:
+# {git_branch}      - Current branch name (e.g., "main", "develop")
+# {git_state}       - Special states (MERGING, REBASING, etc)
+# {git_changes}     - Staged/unstaged indicator (*+n)
+# {git_staged}      - Number of staged files
+# {git_unstaged}    - Number of unstaged files
+# {git_untracked}   - ? if has untracked files
+# {git_remote}      - Remote status (↑n,↓n)
+# {git_ahead}       - Commits ahead of remote
+# {git_behind}      - Commits behind remote
+# {git_stash}       - Stash indicator ($n)
+# {git_stash_count} - Number of stashes
+
+# Examples:
+# format = "{git_branch}✓"                     # Clean branch: main✓
+# format = "{git_branch}{git_changes}"         # With changes: main*+2
+# format = "{git_branch}{git_remote}"          # Remote status: main↑3
+# format = "{git_branch}{git_state}"           # During merge: mainMERGING
+format = "{git_branch}{git_state}{git_changes}{git_remote}{git_stash}"
+error = "⚠️"                                                           # Used when git commands fail
+
 [prompt]
 # Available variables with optional colors:
 # {var} or {var:color} - For configured variables
@@ -43,7 +66,7 @@ name = "dir"
 # Multi-line format example
 format = """
 -----
--({time:cyan} {$HOST:magenta} {hostname:magenta} {local:magenta} {dir:green} {$USER:yellow})-
+-({time:cyan} {$HOST:magenta} {hostname:magenta} {local:magenta} {dir:green} {$USER:yellow} {git_status:yellow})-
 # 
 -----
 """

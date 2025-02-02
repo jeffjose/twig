@@ -42,6 +42,11 @@ mod ip_test;
 
 mod time_test;
 
+mod git;
+use git::Config as GitConfig;
+
+mod git_test;
+
 #[derive(Parser)]
 #[command(version, about = "A configurable time display utility")]
 struct Cli {
@@ -115,6 +120,8 @@ struct Config {
     ip: Vec<IpConfig>,
     #[serde(default)]
     cwd: Vec<CwdConfig>,
+    #[serde(default)]
+    git: Vec<GitConfig>,
 }
 
 #[derive(Deserialize, Default)]
@@ -216,6 +223,7 @@ fn load_config(config_path: &PathBuf) -> Result<Config, ConfigError> {
     validate_section_names(&config.hostname, "hostname")?;
     validate_section_names(&config.ip, "ip")?;
     validate_section_names(&config.cwd, "cwd")?;
+    validate_section_names(&config.git, "git")?;
 
     validate_time_format(&config.time[0].format)?;
     Ok(config)
@@ -318,6 +326,15 @@ async fn main() {
             process_section::<cwd::CwdProvider>(&config_clone.cwd, &format_clone, validate).await
         }));
         task_names.push("CWD variables");
+
+        // Handle git variables
+        let config_clone = Arc::clone(&config);
+        let format_clone = prompt_format.clone();
+        section_counts.push(config_clone.git.len());
+        tasks.push(tokio::spawn(async move {
+            process_section::<git::GitProvider>(&config_clone.git, &format_clone, validate).await
+        }));
+        task_names.push("Git variables");
 
         // Handle environment variables
         let format_clone = prompt_format.clone();
