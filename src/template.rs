@@ -39,6 +39,7 @@ fn apply_color(
                 "bright_magenta" => "1;35",
                 "bright_cyan" => "1;36",
                 "bright_white" => "1;37",
+                "reset" => "0",
                 unknown => {
                     if show_warnings {
                         eprintln!("Warning: unknown color '{}', using white instead", unknown);
@@ -64,6 +65,7 @@ fn apply_color(
                 "bright_magenta" => text.bright_magenta().to_string(),
                 "bright_cyan" => text.bright_cyan().to_string(),
                 "bright_white" => text.bright_white().to_string(),
+                "reset" => text.clear().to_string(),
                 unknown => {
                     if show_warnings {
                         eprintln!("Warning: unknown color '{}', using white instead", unknown);
@@ -162,7 +164,7 @@ pub fn format_template(
     validate: bool,
     mode: Option<&str>,
 ) -> Result<String, Box<dyn Error>> {
-    let mut result = String::with_capacity(template.len());
+    let mut result = String::new();
     let mut chars = template.chars().peekable();
 
     while let Some(c) = chars.next() {
@@ -191,43 +193,20 @@ pub fn format_template(
             }
         } else {
             result.push(c);
-        }
-    }
 
-    // Validate variables first
-    validate_variables(template, vars)?;
-
-    if mode == Some("tcsh") {
-        // Process variables
-        let result = process_variables(template, vars, validate, mode)?;
-
-        // Convert newlines to literal "\n" for tcsh mode
-        let mut final_result = String::new();
-        for ch in result.chars() {
-            if ch == '\n' {
-                final_result.push_str("\\n");
-            } else {
-                final_result.push(ch);
+            // If this is a newline and we're in tcsh mode, add a reset
+            if c == '\n' && mode == Some("tcsh") {
+                result.push_str("%{\x1b[0m%}");
             }
         }
-        Ok(final_result)
-    } else {
-        // For non-tcsh mode, process line by line
-        let lines: Vec<&str> = template.lines().collect();
-        let mut result_lines = Vec::with_capacity(lines.len());
-
-        for line in lines {
-            let processed = process_variables(line, vars, validate, mode)?;
-            result_lines.push(processed);
-        }
-
-        // Filter empty lines in non-tcsh mode
-        Ok(result_lines
-            .into_iter()
-            .filter(|line| !line.trim().is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"))
     }
+
+    // Add final reset if we're in tcsh mode and there was no trailing newline
+    if mode == Some("tcsh") && !result.ends_with("%{\x1b[0m%}") {
+        result.push_str("%{\x1b[0m%}");
+    }
+
+    Ok(result)
 }
 
 // Fix the split_var_and_color function

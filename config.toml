@@ -54,7 +54,7 @@ error = "⚠️"
 #         bright_magenta, bright_cyan, bright_white
 format = """
 -----
--({time:cyan} {$HOST:magenta} {hostname:magenta} {local:magenta} {dir:green} {$USER:yellow} {status})-
+-({time:cyan} {$HOST:magenta} {hostname:magenta} {local:magenta} {dir:green} {$USER:yellow} {status:yellow})-
 # 
 -----
 """
