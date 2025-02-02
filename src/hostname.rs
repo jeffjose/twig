@@ -1,8 +1,8 @@
+use crate::variable::{ConfigWithName, VariableProvider};
 use hostname;
 use serde::{Deserialize, Serialize};
-use std::error::Error;
-use crate::variable::{ConfigWithName, VariableProvider};
 use std::collections::HashMap;
+use std::error::Error;
 use std::process::Command;
 
 #[derive(Debug)]
@@ -42,7 +42,7 @@ fn default_error() -> String {
     String::new()
 }
 
-pub fn get_hostname_variables() -> Result<HashMap<String, String>, HostnameError> {
+pub fn get_hostname_variables(format: &str) -> Result<HashMap<String, String>, HostnameError> {
     let mut vars = HashMap::new();
 
     // Get basic hostname
@@ -52,34 +52,41 @@ pub fn get_hostname_variables() -> Result<HashMap<String, String>, HostnameError
         .into_owned();
     vars.insert("hostname".to_string(), hostname.clone());
 
-    // Get FQDN using hostname -f command
-    let fqdn = Command::new("hostname")
-        .arg("-f")
-        .output()
-        .ok()
-        .and_then(|output| {
-            if output.status.success() {
-                String::from_utf8(output.stdout).ok()
-            } else {
-                None
-            }
-        })
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| hostname.clone());
-    vars.insert("fqdn".to_string(), fqdn);
+    // Only get FQDN if it's actually needed in the format string
+    if format.contains("{fqdn}") {
+        let fqdn = Command::new("hostname")
+            .arg("-f")
+            .output()
+            .ok()
+            .and_then(|output| {
+                if output.status.success() {
+                    String::from_utf8(output.stdout).ok()
+                } else {
+                    None
+                }
+            })
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| hostname);
+        vars.insert("fqdn".to_string(), fqdn);
+    }
 
     Ok(vars)
 }
 
 pub fn get_hostname(config: &Config) -> Result<String, HostnameError> {
-    let vars = get_hostname_variables()?;
-    
+    // Skip variable lookup if format doesn't use any variables
+    if !config.format.contains('{') {
+        return Ok(config.format.clone());
+    }
+
+    let vars = get_hostname_variables(&config.format)?;
+
     // Replace all variables in the format string
     let mut result = config.format.clone();
     for (var_name, value) in vars {
         result = result.replace(&format!("{{{}}}", var_name), &value);
     }
-    
+
     Ok(result)
 }
 
