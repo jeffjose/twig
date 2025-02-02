@@ -61,7 +61,7 @@ impl LazyVariables for GitProvider {
             "git_changes" => get_changes_indicator(),
             "git_staged" => get_staged_count().map(|n| n.to_string()),
             "git_unstaged" => get_unstaged_count().map(|n| n.to_string()),
-            "git_untracked" => has_untracked().map(|b| if b { "?" } else { "" }.to_string()),
+            "git_untracked" => has_untracked().map(|b| if b { " ?" } else { "" }.to_string()),
             "git_remote" => get_remote_status(),
             "git_ahead" => get_ahead_count().map(|n| n.to_string()),
             "git_behind" => get_behind_count().map(|n| n.to_string()),
@@ -110,6 +110,7 @@ impl VariableProvider for GitProvider {
 fn run_git(args: &[&str]) -> Result<String, GitError> {
     Command::new("git")
         .args(args)
+        .current_dir(std::env::current_dir().map_err(|e| GitError::CommandFailed(e.to_string()))?)
         .output()
         .map_err(|e| GitError::CommandFailed(e.to_string()))
         .and_then(|output| {
@@ -164,12 +165,15 @@ fn get_changes_indicator() -> Result<String, GitError> {
     let unstaged = get_unstaged_count()?;
     
     let mut indicator = String::new();
-    if unstaged > 0 {
-        indicator.push('*');
-    }
-    if staged > 0 {
-        indicator.push('+');
-        indicator.push_str(&staged.to_string());
+    if unstaged > 0 || staged > 0 {
+        indicator.push(' ');
+        if unstaged > 0 {
+            indicator.push('*');
+        }
+        if staged > 0 {
+            indicator.push('+');
+            indicator.push_str(&staged.to_string());
+        }
     }
     
     Ok(indicator)
@@ -187,35 +191,51 @@ fn get_unstaged_count() -> Result<usize, GitError> {
 
 fn has_untracked() -> Result<bool, GitError> {
     let status = run_git(&["ls-files", "--others", "--exclude-standard"])?;
-    Ok(!status.is_empty())
+    if !status.is_empty() {
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 fn get_remote_status() -> Result<String, GitError> {
-    let ahead = get_ahead_count()?;
-    let behind = get_behind_count()?;
-    
-    match (ahead, behind) {
-        (0, 0) => Ok(String::new()),
-        (a, 0) => Ok(format!("↑{}", a)),
-        (0, b) => Ok(format!("↓{}", b)),
-        (a, b) => Ok(format!("↕{},{}", a, b)),
+    // First check if we have an upstream branch
+    match run_git(&["rev-parse", "--abbrev-ref", "@{u}"]) {
+        Ok(_) => {
+            let ahead = get_ahead_count()?;
+            let behind = get_behind_count()?;
+            
+            match (ahead, behind) {
+                (0, 0) => Ok(String::new()),
+                (a, 0) => Ok(format!(" ↑{}", a)),
+                (0, b) => Ok(format!(" ↓{}", b)),
+                (a, b) => Ok(format!(" ↕{},{}", a, b)),
+            }
+        },
+        Err(_) => Ok(String::new()) // No upstream branch
     }
 }
 
 fn get_ahead_count() -> Result<usize, GitError> {
-    let count = run_git(&["rev-list", "@{u}..HEAD", "--count"])?;
-    count.parse::<usize>().map_err(|e: std::num::ParseIntError| GitError::ParseError(e.to_string()))
+    match run_git(&["rev-list", "@{u}..HEAD", "--count"]) {
+        Ok(count) => count.parse::<usize>()
+            .map_err(|e: std::num::ParseIntError| GitError::ParseError(e.to_string())),
+        Err(_) => Ok(0)  // Handle case when no upstream exists
+    }
 }
 
 fn get_behind_count() -> Result<usize, GitError> {
-    let count = run_git(&["rev-list", "HEAD..@{u}", "--count"])?;
-    count.parse::<usize>().map_err(|e: std::num::ParseIntError| GitError::ParseError(e.to_string()))
+    match run_git(&["rev-list", "HEAD..@{u}", "--count"]) {
+        Ok(count) => count.parse::<usize>()
+            .map_err(|e: std::num::ParseIntError| GitError::ParseError(e.to_string())),
+        Err(_) => Ok(0)  // Handle case when no upstream exists
+    }
 }
 
 fn get_stash_indicator() -> Result<String, GitError> {
     let count = get_stash_count()?;
     if count > 0 {
-        Ok(format!("${}", count))
+        Ok(format!(" ${}", count))
     } else {
         Ok(String::new())
     }

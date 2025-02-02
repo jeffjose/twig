@@ -42,7 +42,7 @@ name = "status"
 # - Remote status (↑n,↓n) via git_remote
 # - Stash indicator ($n) via git_stash
 # - Untracked files indicator (?) via git_untracked
-format = "[{git_branch} {git_changes}{git_remote}{git_stash}{git_untracked}]"
+format = "[{git_branch}{git_changes}{git_remote}{git_stash}{git_untracked}]"
 error = "⚠️"
 
 [prompt]
