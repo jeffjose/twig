@@ -266,7 +266,6 @@ async fn main() {
         let config = load_config(&config_path)?;
         let config_duration = config_start.elapsed();
 
-        // Time the variable gathering
         let vars_start = Instant::now();
 
         // Create shared config and cli references
@@ -277,10 +276,12 @@ async fn main() {
         // Create parallel tasks for each config section
         let mut tasks = Vec::new();
         let mut task_names = Vec::new();
+        let mut section_counts = Vec::new();
 
         // Handle time variables
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
+        section_counts.push(config_clone.time.len());
         tasks.push(tokio::spawn(async move {
             process_section::<time::TimeProvider>(&config_clone.time, &format_clone, validate).await
         }));
@@ -289,12 +290,12 @@ async fn main() {
         // Handle hostname variables
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
-        let validate_clone = validate;
+        section_counts.push(config_clone.hostname.len());
         tasks.push(tokio::spawn(async move {
             process_section::<hostname::HostnameProvider>(
                 &config_clone.hostname,
                 &format_clone,
-                validate_clone,
+                validate,
             )
             .await
         }));
@@ -303,15 +304,16 @@ async fn main() {
         // Handle IP variables
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
-        let validate_clone = validate;
+        section_counts.push(config_clone.ip.len());
         tasks.push(tokio::spawn(async move {
-            process_section::<ip::IpProvider>(&config_clone.ip, &format_clone, validate_clone).await
+            process_section::<ip::IpProvider>(&config_clone.ip, &format_clone, validate).await
         }));
         task_names.push("IP variables");
 
         // Handle CWD variables
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
+        section_counts.push(config_clone.cwd.len());
         tasks.push(tokio::spawn(async move {
             process_section::<cwd::CwdProvider>(&config_clone.cwd, &format_clone, validate).await
         }));
@@ -319,9 +321,10 @@ async fn main() {
 
         // Handle environment variables
         let format_clone = prompt_format.clone();
+        let env_vars = get_env_vars_from_format(&format_clone);
+        section_counts.push(env_vars.len());
         tasks.push(tokio::spawn(async move {
             let mut configs = Vec::new();
-            let env_vars = get_env_vars_from_format(&format_clone);
             if validate {
                 eprintln!("Found environment variables: {:?}", env_vars);
             }
@@ -339,15 +342,21 @@ async fn main() {
         let results = join_all(tasks).await;
         let mut all_variables = Vec::new();
         let mut task_timings = Vec::new();
+        let mut processed_vars = Vec::new();
 
-        for (result, task_name) in results.into_iter().zip(task_names.iter()) {
+        for ((result, task_name), section_count) in results
+            .into_iter()
+            .zip(task_names.iter())
+            .zip(section_counts.iter())
+        {
             match result {
                 Ok(ProcessingResult {
                     mut variables,
                     duration,
                 }) => {
+                    processed_vars.push(variables.len());
                     all_variables.append(&mut variables);
-                    task_timings.push((task_name, duration));
+                    task_timings.push((task_name, duration, *section_count));
                 }
                 Err(e) => {
                     if validate {
@@ -375,15 +384,44 @@ async fn main() {
         println!("{}", output);
 
         if cli.timing {
+            let total_time = start.elapsed();
+            let total_nanos = total_time.as_nanos() as f64;
+
             eprintln!("\nTiming information:");
-            eprintln!("  Config loading: {:?}", config_duration);
-            eprintln!("  Variable gathering (total): {:?}", vars_duration);
+            eprintln!(
+                "  Config loading: {:?} ({:.1}%)",
+                config_duration,
+                (config_duration.as_nanos() as f64 / total_nanos * 100.0)
+            );
+            eprintln!(
+                "  Variable gathering (total): {:?} ({:.1}%)",
+                vars_duration,
+                (vars_duration.as_nanos() as f64 / total_nanos * 100.0)
+            );
             eprintln!("    Parallel task timings:");
-            for (name, duration) in task_timings {
-                eprintln!("      {}: {:?}", name, duration);
+
+            // Sort timings by duration for better visibility
+            let mut timing_data: Vec<_> = task_timings.iter().zip(processed_vars.iter()).collect();
+            timing_data.sort_by_key(|((_, duration, _), _)| std::cmp::Reverse(*duration));
+
+            for ((name, duration, config_count), processed_count) in timing_data {
+                let percentage = duration.as_nanos() as f64 / total_nanos * 100.0;
+                eprintln!(
+                    "      {} ({} configs, {} vars processed): {:?} ({:.1}%){}",
+                    name,
+                    config_count,
+                    processed_count,
+                    duration,
+                    percentage,
+                    if percentage > 20.0 { " ⚠️" } else { "" } // Flag high-impact operations
+                );
             }
-            eprintln!("  Template formatting: {:?}", template_start.elapsed());
-            eprintln!("  Total time: {:?}", start.elapsed());
+            eprintln!(
+                "  Template formatting: {:?} ({:.1}%)",
+                template_start.elapsed(),
+                (template_start.elapsed().as_nanos() as f64 / total_nanos * 100.0)
+            );
+            eprintln!("  Total time: {:?}", total_time);
         }
 
         Ok(())
