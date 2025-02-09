@@ -58,7 +58,7 @@ struct Cli {
     #[arg(short, long)]
     config: Option<PathBuf>,
 
-    /// Output mode (e.g. 'tcsh')
+    /// Output mode (e.g. 'tcsh', 'tcsh_debug')
     #[arg(long)]
     mode: Option<String>,
 

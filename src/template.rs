@@ -48,6 +48,12 @@ fn apply_color(
             };
             Ok(format!("%{{\x1b[{}m%}}{}%{{\x1b[0m%}}", color_code, text))
         }
+        Some("debug_format") => Ok(format!(
+            "{{{}}}{}{{{}}}",
+            color,
+            text,
+            format!("/{}", color)
+        )),
         None => {
             let result = match color {
                 "red" => text.red().to_string(),
@@ -162,6 +168,12 @@ pub fn format_template(
     validate: bool,
     mode: Option<&str>,
 ) -> Result<String, Box<dyn Error>> {
+    if mode == Some("tcsh_debug") {
+        let colored_output = format_template(template, vars, validate, None)?;
+        let debug_output = process_variables(template, vars, validate, Some("debug_format"))?;
+        return Ok(format!("{}\nDEBUG: \n{}", colored_output, debug_output));
+    }
+
     let mut result = String::with_capacity(template.len());
     let mut chars = template.chars().peekable();
 
