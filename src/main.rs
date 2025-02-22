@@ -29,6 +29,8 @@ use cwd::Config as CwdConfig;
 
 mod template_test;
 
+mod colors;
+
 #[derive(Parser)]
 #[command(version, about = "A configurable time display utility")]
 struct Cli {
@@ -47,6 +49,10 @@ struct Cli {
     /// Show validation errors and warnings
     #[arg(long)]
     validate: bool,
+
+    /// Show all available colors and styles
+    #[arg(long)]
+    colors: bool,
 }
 
 #[derive(Debug)]
@@ -306,6 +312,11 @@ struct TimingData {
 async fn main() {
     let start = Instant::now();
     let cli = Cli::parse();
+
+    if cli.colors {
+        colors::print_color_test();
+        return;
+    }
 
     let result: Result<(), Box<dyn Error>> = (|| async {
         // Get config path and ensure it exists
