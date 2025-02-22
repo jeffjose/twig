@@ -27,8 +27,6 @@ use ip::Config as IpConfig;
 mod cwd;
 use cwd::Config as CwdConfig;
 
-mod template_test;
-
 mod colors;
 
 #[derive(Parser)]
@@ -428,9 +426,9 @@ async fn main() {
             // Get IP data once - this is the expensive part
             let fetch_start = Instant::now();
             let ip_data = match &config_clone.ip.iter().find(|c| c.interface.is_some()) {
-                Some(config) => ip::get_ip(config),  // Use first interface config if any
+                Some(config) => ip::get_ip(config), // Use first interface config if any
                 None => local_ip_address::local_ip()
-                    .map_err(|e| ip::IpConfigError::Lookup(e.to_string()))
+                    .map_err(|e| ip::IpConfigError::Lookup(e.to_string())),
             };
             timing.fetch_time = fetch_start.elapsed();
             timing.fetch_count = 1;
@@ -561,25 +559,38 @@ async fn main() {
             let total_nanos = total_duration.as_nanos() as f64;
 
             eprintln!("\nTiming information:");
-            eprintln!("  Config loading: {:?} ({:.1}%)", config_duration, 
-                (config_duration.as_nanos() as f64 / total_nanos * 100.0));
-            
-            eprintln!("  Variable gathering (total): {:?} ({:.1}%)", vars_duration,
-                (vars_duration.as_nanos() as f64 / total_nanos * 100.0));
+            eprintln!(
+                "  Config loading: {:?} ({:.1}%)",
+                config_duration,
+                (config_duration.as_nanos() as f64 / total_nanos * 100.0)
+            );
+
+            eprintln!(
+                "  Variable gathering (total): {:?} ({:.1}%)",
+                vars_duration,
+                (vars_duration.as_nanos() as f64 / total_nanos * 100.0)
+            );
             eprintln!("    Parallel task details:");
             for (name, timing_data) in task_timings {
                 eprintln!("      {}: ", name);
-                eprintln!("        Data fetch ({} times): {:?} ({:.1}%)", 
+                eprintln!(
+                    "        Data fetch ({} times): {:?} ({:.1}%)",
                     timing_data.fetch_count,
                     timing_data.fetch_time,
-                    (timing_data.fetch_time.as_nanos() as f64 / total_nanos * 100.0));
-                eprintln!("        Formatting: {:?} ({:.1}%)",
+                    (timing_data.fetch_time.as_nanos() as f64 / total_nanos * 100.0)
+                );
+                eprintln!(
+                    "        Formatting: {:?} ({:.1}%)",
                     timing_data.format_time,
-                    (timing_data.format_time.as_nanos() as f64 / total_nanos * 100.0));
+                    (timing_data.format_time.as_nanos() as f64 / total_nanos * 100.0)
+                );
             }
-            
-            eprintln!("  Template formatting: {:?} ({:.1}%)", template_start.elapsed(),
-                (template_start.elapsed().as_nanos() as f64 / total_nanos * 100.0));
+
+            eprintln!(
+                "  Template formatting: {:?} ({:.1}%)",
+                template_start.elapsed(),
+                (template_start.elapsed().as_nanos() as f64 / total_nanos * 100.0)
+            );
             eprintln!("  Total time: {:?}", total_duration);
         }
 

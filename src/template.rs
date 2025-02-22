@@ -1,4 +1,5 @@
 use colored::*;
+use rstest::rstest;
 use std::error::Error;
 
 #[derive(Debug)]
@@ -99,7 +100,7 @@ fn apply_format(
         None => {
             let formats: Vec<&str> = format_str.split(',').map(str::trim).collect();
             let mut colored = text.normal(); // Start with normal style
-            
+
             for fmt in formats {
                 colored = match fmt {
                     // Colors
@@ -192,7 +193,7 @@ fn process_variables(
         if let Some(quote_end) = result[start + 2..].find('\"') {
             let quote_end = start + 2 + quote_end;
             let text = &result[start + 2..quote_end];
-            
+
             // Check if there's a color specification
             if result[quote_end + 1..].starts_with(':') {
                 if let Some(end) = result[quote_end + 1..].find('}') {
@@ -287,5 +288,113 @@ pub fn format_template(
             .filter(|line| !line.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    // Basic variable substitution
+    #[case::basic_var("{var}", "value", vec![("var", "value")])]
+    #[case::multiple_vars("{a}{b}", "12", vec![("a", "1"), ("b", "2")])]
+    #[case::env_var("{$USER}", "testuser", vec![("$USER", "testuser")])]
+    #[case::quoted_text("{\"hello\"}", "hello", vec![])]
+    #[case::quoted_with_var("{\"prefix-\"}{var}", "prefix-value", vec![("var", "value")])]
+    #[case::repeated_var("{var} {var}", "test test", vec![("var", "test")])]
+    #[case::with_punctuation("Hello, {name}!", "Hello, world!", vec![("name", "world")])]
+    #[case::plain_text("plain text", "plain text", vec![])]
+    #[case::wrapped_var("({var})", "(value)", vec![("var", "value")])]
+    #[case::multiple_env_vars("{$USER}@{$HOST}", "testuser@testhost", vec![("$USER", "testuser"), ("$HOST", "testhost")])]
+    // Edge cases
+    #[case::empty_template("", "", vec![])]
+    #[case::invalid_var("{}", "{}", vec![])]
+    #[case::nested_braces("{{var}}", "{value}", vec![("var", "value")])]
+    #[case::triple_var("{var}{var}{var}", "valuevaluevalue", vec![("var", "value")])]
+    #[case::invalid_var_spaces("{ var }", "{ var }", vec![("var", "value")])]
+    // Special characters
+    #[case::unicode_arrow("{\"→\"}", "→", vec![])]
+    #[case::escaped_quotes("{\"\\\"\"}", "\"", vec![])]
+    #[case::repeated_with_colon("{var}:{var}", "test:test", vec![("var", "test")])]
+    #[case::prefix_suffix("pre{var}post", "prevaluepost", vec![("var", "value")])]
+    #[case::multiple_with_dash("{a}-{b}-{c}", "1-2-3", vec![("a", "1"), ("b", "2"), ("c", "3")])]
+    // Environment variables
+    #[case::path_var("{$PATH}", "/usr/bin", vec![("$PATH", "/usr/bin")])]
+    #[case::home_and_user("{$HOME}/{$USER}", "/home/testuser", vec![("$HOME", "/home"), ("$USER", "testuser")])]
+    #[case::shell_and_term("{$SHELL}-{$TERM}", "bash-xterm", vec![("$SHELL", "bash"), ("$TERM", "xterm")])]
+    // Mixed cases
+    #[case::quoted_var_quoted("{\"prefix\"}{var}{\"suffix\"}", "prefixvaluesuffix", vec![("var", "value")])]
+    #[case::vars_with_quoted("{a}{\"mid\"}{b}", "1mid2", vec![("a", "1"), ("b", "2")])]
+    fn test_basic_substitution(
+        #[case] template: &str,
+        #[case] expected: &str,
+        #[case] vars: Vec<(&str, &str)>,
+    ) {
+        let output = format_template(template, &vars, false, None).unwrap();
+        println!("\nTemplate:        {:?}", template);
+        println!("Variables:       {:?}", vars);
+        println!("Actual output:   {:?}", output);
+        println!("Expected output: {:?}", expected);
+        assert_eq!(
+            output, expected,
+            "Template {:?} with vars {:?} produced unexpected output",
+            template, vars
+        );
+    }
+
+    #[rstest]
+    // Basic multiline
+    #[case::basic_two_lines("line1\nline2", "line1\nline2", vec![], None)]
+    #[case::var_in_both_lines("hello {name}\nbye {name}", "hello world\nbye world", vec![("name", "world")], None)]
+    #[case::filter_empty_middle("line1\n\nline2", "line1\nline2", vec![], None)]
+    // tcsh mode
+    #[case::tcsh_basic("line1\nline2", "line1\\nline2", vec![], Some("tcsh"))]
+    #[case::tcsh_with_env_vars("{$USER}\n{$HOST}", "testuser\\ntesthost", vec![("$USER", "testuser"), ("$HOST", "testhost")], Some("tcsh"))]
+    #[case::preserve_indent("line1\n  line2\n    line3", "line1\n  line2\n    line3", vec![], None)]
+    // Empty lines
+    #[case::all_empty("\n\n\n", "", vec![], None)]
+    #[case::all_whitespace("  \n  \n  ", "", vec![], None)]
+    #[case::multiple_empty_lines("start\n\n\nend", "start\nend", vec![], None)]
+    // Indentation
+    #[case::increasing_spaces("  a\n    b\n      c", "  a\n    b\n      c", vec![], None)]
+    #[case::increasing_tabs("\ta\n\t\tb\n\t\t\tc", "\ta\n\t\tb\n\t\t\tc", vec![], None)]
+    // Variables at different positions
+    #[case::var_at_line_start("{var}\n{var}", "value\nvalue", vec![("var", "value")], None)]
+    #[case::var_mixed_position("start {var}\n{var} end", "start value\nvalue end", vec![("var", "value")], None)]
+    // Mixed content
+    #[case::three_sections("Title\n---\nContent", "Title\n---\nContent", vec![], None)]
+    #[case::markdown_headers("# {title}\n## {subtitle}", "# Header\n## Subheader", vec![("title", "Header"), ("subtitle", "Subheader")], None)]
+    // tcsh mode variations
+    #[case::tcsh_three_lines("a\nb\nc", "a\\nb\\nc", vec![], Some("tcsh"))]
+    #[case::tcsh_repeated_var("{var}\n{var}", "value\\nvalue", vec![("var", "value")], Some("tcsh"))]
+    #[case::tcsh_preserve_spaces("  spaces  \n  matter  ", "  spaces  \\n  matter  ", vec![], Some("tcsh"))]
+    // Complex cases
+    #[case::quoted_arrows("{\">\"}\n{var}\n{\"<\"}", ">\nvalue\n<", vec![("var", "value")], None)]
+    #[case::numbered_lines("Line 1 {a}\nLine 2 {b}\nLine 3 {c}", "Line 1 1\nLine 2 2\nLine 3 3", vec![("a", "1"), ("b", "2"), ("c", "3")], None)]
+    #[case::markdown_doc("# {title}\n\n## {subtitle}\n\n{content}", "# Header\n## Subheader\nText", vec![("title", "Header"), ("subtitle", "Subheader"), ("content", "Text")], None)]
+    // Edge cases
+    #[case::single_newline("\n", "", vec![], None)]
+    #[case::trailing_newline("a\n", "a", vec![], None)]
+    #[case::leading_newline("\na", "a", vec![], None)]
+    #[case::multiple_empty_groups("a\n\nb\n\nc", "a\nb\nc", vec![], None)]
+    fn test_multiline(
+        #[case] template: &str,
+        #[case] expected: &str,
+        #[case] vars: Vec<(&str, &str)>,
+        #[case] mode: Option<&str>,
+    ) {
+        let output = format_template(template, &vars, false, mode).unwrap();
+        println!("\nTemplate:        {:?}", template);
+        println!("Variables:       {:?}", vars);
+        println!("Mode:           {:?}", mode);
+        println!("Actual output:   {:?}", output);
+        println!("Expected output: {:?}", expected);
+        assert_eq!(
+            output, expected,
+            "Template {:?} with vars {:?} in mode {:?} produced unexpected output",
+            template, vars, mode
+        );
     }
 }
