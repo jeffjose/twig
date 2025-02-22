@@ -300,51 +300,38 @@ pub fn format_template(
         // For non-tcsh mode, process line by line
         let lines: Vec<&str> = template.lines().collect();
         let line_count = lines.len();
-        let mut result_lines = Vec::with_capacity(line_count);
 
         // Process each line
+        let mut result_lines = Vec::with_capacity(line_count);
         for line in lines {
             let processed = process_variables(line, variables, show_warnings, mode)?;
             result_lines.push(processed);
         }
 
-        // Check if any line contains color formatting
         let has_color = result_lines.iter().any(|line| line.contains("\x1b["));
 
-        // If there's color formatting, handle differently based on number of lines
-        if has_color {
-            if line_count == 1 {
-                // For single-line color tests, only include lines with color
-                Ok(result_lines
-                    .into_iter()
-                    .filter(|line| line.contains("\x1b["))
-                    .collect::<Vec<_>>()
-                    .join("\n"))
-            } else if result_lines
-                .iter()
-                .filter(|line| line.contains("\x1b["))
-                .count()
-                == 1
-            {
-                // If there's only one line with color in a multi-line template,
-                // only include that line
-                Ok(result_lines
-                    .into_iter()
-                    .filter(|line| line.contains("\x1b["))
-                    .collect::<Vec<_>>()
-                    .join("\n"))
-            } else {
-                // For multi-line color tests with multiple colored lines, preserve all lines
-                Ok(result_lines.join("\n"))
-            }
+        let mut result = if has_color {
+            // For color templates, preserve all lines
+            result_lines.join("\n")
         } else {
-            // For non-color tests, filter out empty lines
-            Ok(result_lines
+            // For non-color templates, filter out empty lines
+            result_lines
                 .into_iter()
                 .filter(|line| !line.trim().is_empty())
                 .collect::<Vec<_>>()
-                .join("\n"))
+                .join("\n")
+        };
+
+        // Add ending sequence if there are any active color attributes
+        let last_reset = result.rfind("\x1b[0m");
+        let last_color = result.rfind("\x1b[");
+        if let Some(last_color) = last_color {
+            if last_reset.map_or(true, |pos| pos < last_color) {
+                result.push_str("\x1b[0m");
+            }
         }
+
+        Ok(result)
     }
 }
 
@@ -491,6 +478,12 @@ mod tests {
     #[case::multiple_same_var("{var:red} and {var:blue}", "\u{1b}[31mvalue\u{1b}[0m and \u{1b}[34mvalue\u{1b}[0m", vec![("var", "value")])]
     #[case::nested_color_ignored("{{var:red}:blue}", "{value:blue}", vec![("var", "value")])] // Nested format ignored
     #[case::space_in_format("{var: red }", "value", vec![("var", "value")])] // Spaces in format ignored
+    // Tests for ending sequence behavior
+    #[case::color_then_plain("{var:red} plain", "\u{1b}[31mvalue\u{1b}[0m plain", vec![("var", "value")])]
+    #[case::plain_then_color("plain {var:red}", "plain \u{1b}[31mvalue\u{1b}[0m", vec![("var", "value")])]
+    #[case::multiple_colors_with_plain("{var1:red} plain {var2:blue}", "\u{1b}[31mvalue1\u{1b}[0m plain \u{1b}[34mvalue2\u{1b}[0m", vec![("var1", "value1"), ("var2", "value2")])]
+    #[case::multiple_styles_ending("{var:bold,red} plain", "\u{1b}[1;31mvalue\u{1b}[0m plain", vec![("var", "value")])]
+    #[case::multiple_vars_same_color("{var1:red}{var2:red}", "\u{1b}[31mvalue1\u{1b}[0m\u{1b}[31mvalue2\u{1b}[0m", vec![("var1", "value1"), ("var2", "value2")])]
     fn test_color_substitution(
         #[case] template: &str,
         #[case] expected: &str,
@@ -510,7 +503,7 @@ mod tests {
 
     #[rstest]
     // Basic multi-line colors
-    #[case::multiline_red("line1\n{var:red}", "\u{1b}[31mvalue\u{1b}[0m", vec![("var", "value")], None)]
+    #[case::multiline_red("line1\n{var:red}", "line1\n\u{1b}[31mvalue\u{1b}[0m", vec![("var", "value")], None)]
     #[case::multiline_green_blue("line1\n{var1:green}\nline2\n{var2:blue}", "line1\n\u{1b}[32mvalue1\u{1b}[0m\nline2\n\u{1b}[34mvalue2\u{1b}[0m", vec![("var1", "value1"), ("var2", "value2")], None)]
     #[case::multiline_all_colors(
         "{var1:red}\n{var2:green}\n{var3:blue}\n{var4:yellow}\n{var5:magenta}\n{var6:cyan}\n{var7:white}",
@@ -634,6 +627,31 @@ mod tests {
         "{var1:bold,italic,red}\n{var2:bold,italic,blue}",
         "\u{1b}[1;3;31mvalue\u{1b}[0m\n\u{1b}[1;3;34mvalue\u{1b}[0m",
         vec![("var1", "value"), ("var2", "value")],
+        None
+    )]
+    // Tests for multiline ending sequence behavior
+    #[case::multiline_color_then_plain(
+        "{var:red}\nplain text",
+        "\u{1b}[31mvalue\u{1b}[0m\nplain text",
+        vec![("var", "value")],
+        None
+    )]
+    #[case::multiline_plain_then_color(
+        "plain text\n{var:red}",
+        "plain text\n\u{1b}[31mvalue\u{1b}[0m",
+        vec![("var", "value")],
+        None
+    )]
+    #[case::multiline_mixed_ending(
+        "{var1:red}\nplain\n{var2:blue}\nmore plain",
+        "\u{1b}[31mvalue1\u{1b}[0m\nplain\n\u{1b}[34mvalue2\u{1b}[0m\nmore plain",
+        vec![("var1", "value1"), ("var2", "value2")],
+        None
+    )]
+    #[case::multiline_style_color_mix(
+        "{var1:bold}\n{var2:red}\n{var3:italic,blue}",
+        "\u{1b}[1mvalue1\u{1b}[0m\n\u{1b}[31mvalue2\u{1b}[0m\n\u{1b}[3;34mvalue3\u{1b}[0m",
+        vec![("var1", "value1"), ("var2", "value2"), ("var3", "value3")],
         None
     )]
     fn test_multiline_color_substitution(
