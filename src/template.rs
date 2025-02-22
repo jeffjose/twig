@@ -295,6 +295,23 @@ pub fn format_template(
                 final_result.push(ch);
             }
         }
+
+        // Add ending sequence if there are any active color attributes
+        // or if there are colored lines followed by non-colored lines
+        let last_reset = final_result.rfind("%{\x1b[0m%}");
+        let last_color = final_result.rfind("%{\x1b[");
+        let lines: Vec<&str> = final_result.split("\\n").collect();
+        let has_color_followed_by_plain = final_result.contains("%{\x1b[")
+            && lines
+                .last()
+                .map_or(false, |last_line| !last_line.contains("%{\x1b["));
+
+        if has_color_followed_by_plain
+            || (last_color.is_some() && last_reset.map_or(true, |pos| pos < last_color.unwrap()))
+        {
+            final_result.push_str("%{\x1b[0m%}");
+        }
+
         Ok(final_result)
     } else {
         // For non-tcsh mode, process line by line
@@ -323,12 +340,20 @@ pub fn format_template(
         };
 
         // Add ending sequence if there are any active color attributes
+        // or if there are colored lines followed by non-colored lines
         let last_reset = result.rfind("\x1b[0m");
         let last_color = result.rfind("\x1b[");
-        if let Some(last_color) = last_color {
-            if last_reset.map_or(true, |pos| pos < last_color) {
-                result.push_str("\x1b[0m");
-            }
+        let has_color_followed_by_plain = result.contains("\x1b[")
+            && result
+                .lines()
+                .rev()
+                .next()
+                .map_or(false, |last_line| !last_line.contains("\x1b["));
+
+        if has_color_followed_by_plain
+            || (last_color.is_some() && last_reset.map_or(true, |pos| pos < last_color.unwrap()))
+        {
+            result.push_str("\x1b[0m");
         }
 
         Ok(result)
@@ -534,7 +559,7 @@ mod tests {
     // Mixed with plain text
     #[case::multiline_mixed_plain(
         "plain1\n{var1:red}\nplain2\n{var2:blue}\nplain3",
-        "plain1\n\u{1b}[31mvalue\u{1b}[0m\nplain2\n\u{1b}[34mvalue\u{1b}[0m\nplain3",
+        "plain1\n\u{1b}[31mvalue\u{1b}[0m\nplain2\n\u{1b}[34mvalue\u{1b}[0m\nplain3\u{1b}[0m",
         vec![("var1", "value"), ("var2", "value")],
         None
     )]
@@ -632,25 +657,31 @@ mod tests {
     // Tests for multiline ending sequence behavior
     #[case::multiline_color_then_plain(
         "{var:red}\nplain text",
-        "\u{1b}[31mvalue\u{1b}[0m\nplain text",
-        vec![("var", "value")],
-        None
-    )]
-    #[case::multiline_plain_then_color(
-        "plain text\n{var:red}",
-        "plain text\n\u{1b}[31mvalue\u{1b}[0m",
+        "\u{1b}[31mvalue\u{1b}[0m\nplain text\u{1b}[0m",
         vec![("var", "value")],
         None
     )]
     #[case::multiline_mixed_ending(
         "{var1:red}\nplain\n{var2:blue}\nmore plain",
-        "\u{1b}[31mvalue1\u{1b}[0m\nplain\n\u{1b}[34mvalue2\u{1b}[0m\nmore plain",
+        "\u{1b}[31mvalue1\u{1b}[0m\nplain\n\u{1b}[34mvalue2\u{1b}[0m\nmore plain\u{1b}[0m",
         vec![("var1", "value1"), ("var2", "value2")],
         None
     )]
     #[case::multiline_style_color_mix(
         "{var1:bold}\n{var2:red}\n{var3:italic,blue}",
         "\u{1b}[1mvalue1\u{1b}[0m\n\u{1b}[31mvalue2\u{1b}[0m\n\u{1b}[3;34mvalue3\u{1b}[0m",
+        vec![("var1", "value1"), ("var2", "value2"), ("var3", "value3")],
+        None
+    )]
+    #[case::multiline_mixed_colors_with_hash(
+        "{var1:red} {var2:blue} {var3:green}\n#",
+        "\u{1b}[31mvalue1\u{1b}[0m \u{1b}[34mvalue2\u{1b}[0m \u{1b}[32mvalue3\u{1b}[0m\n#\u{1b}[0m",
+        vec![("var1", "value1"), ("var2", "value2"), ("var3", "value3")],
+        None
+    )]
+    #[case::multiline_mixed_colors_with_hash_space(
+        "{var1:red} {var2:blue} {var3:green}\n# ",
+        "\u{1b}[31mvalue1\u{1b}[0m \u{1b}[34mvalue2\u{1b}[0m \u{1b}[32mvalue3\u{1b}[0m\n# \u{1b}[0m",
         vec![("var1", "value1"), ("var2", "value2"), ("var3", "value3")],
         None
     )]
