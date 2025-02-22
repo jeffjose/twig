@@ -189,24 +189,44 @@ fn process_variables(
     let mut replacements = Vec::new();
 
     while let Some(start) = result[position..].find("{\"") {
-        let start = start + position;
-        if let Some(quote_end) = result[start + 2..].find('\"') {
-            let quote_end = start + 2 + quote_end;
+        let start = position + result[position..].find("{\"").unwrap();
+        // Find the matching quote that isn't escaped
+        let mut quote_end = None;
+        let mut pos = start + 2;
+
+        // Convert to char indices for proper Unicode handling
+        let chars: Vec<(usize, char)> = result[pos..].char_indices().collect();
+        for (i, ch) in chars {
+            if ch == '"' {
+                let quote_pos = pos + i;
+                // Check if this quote is escaped
+                let prev_char_pos = result[..quote_pos].chars().count() - 1;
+                if prev_char_pos > 0 && result.chars().nth(prev_char_pos) == Some('\\') {
+                    continue;
+                }
+                quote_end = Some(pos + i);
+                break;
+            }
+        }
+
+        if let Some(quote_end) = quote_end {
             let text = &result[start + 2..quote_end];
+            // Unescape the text (convert \\" to ")
+            let unescaped = text.replace("\\\"", "\"");
 
             // Check if there's a color specification
             if result[quote_end + 1..].starts_with(':') {
                 if let Some(end) = result[quote_end + 1..].find('}') {
                     let end = quote_end + 1 + end;
                     let color = &result[quote_end + 2..end];
-                    let formatted_text = apply_format(text, color, show_warnings, mode)?;
+                    let formatted_text = apply_format(&unescaped, color, show_warnings, mode)?;
                     replacements.push((start..end + 1, formatted_text));
                     position = end + 1;
                     continue;
                 }
             } else if result[quote_end + 1..].starts_with('}') {
                 // No color specification, just replace the quoted text
-                replacements.push((start..quote_end + 2, text.to_string()));
+                replacements.push((start..quote_end + 2, unescaped));
                 position = quote_end + 2;
                 continue;
             }
