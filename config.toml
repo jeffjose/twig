@@ -54,7 +54,7 @@ shorten = false
 format = """
 {"→":cyan} {"normal"} {"bold":red,bold} {"italic":yellow,italic}
 -({datetime:cyan} {t} {host:magenta} {local:magenta} {dir:green} {$USER:yellow})-
-{"#":red}
+#
 """
 
 # Or another example:
