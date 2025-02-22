@@ -3,14 +3,12 @@ use std::error::Error;
 
 #[derive(Debug)]
 pub enum TemplateError {
-    MissingVariable(String),
     InvalidSyntax(String),
 }
 
 impl std::fmt::Display for TemplateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TemplateError::MissingVariable(var) => write!(f, "Missing variable: {}", var),
             TemplateError::InvalidSyntax(msg) => write!(f, "Invalid syntax: {}", msg),
         }
     }
@@ -87,7 +85,7 @@ fn apply_color(
     }
 }
 
-fn validate_variables(template: &str, variables: &[(&str, &str)]) -> Result<(), TemplateError> {
+fn validate_variables(template: &str, _variables: &[(&str, &str)]) -> Result<(), TemplateError> {
     // Only validate syntax (unclosed braces)
     let mut pos = 0;
     while let Some(start) = template[pos..].find('{') {

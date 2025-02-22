@@ -455,15 +455,22 @@ async fn main() {
         println!("{}", output);
 
         if cli.timing {
+            let total_duration = start.elapsed();
+            let total_nanos = total_duration.as_nanos() as f64;
+
             eprintln!("\nTiming information:");
-            eprintln!("  Config loading: {:?}", config_duration);
-            eprintln!("  Variable gathering (total): {:?}", vars_duration);
+            eprintln!("  Config loading: {:?} ({:.1}%)", config_duration, 
+                (config_duration.as_nanos() as f64 / total_nanos * 100.0));
+            eprintln!("  Variable gathering (total): {:?} ({:.1}%)", vars_duration,
+                (vars_duration.as_nanos() as f64 / total_nanos * 100.0));
             eprintln!("    Parallel task timings:");
             for (name, duration) in task_timings {
-                eprintln!("      {}: {:?}", name, duration);
+                eprintln!("      {}: {:?} ({:.1}%)", name, duration,
+                    (duration.as_nanos() as f64 / total_nanos * 100.0));
             }
-            eprintln!("  Template formatting: {:?}", template_start.elapsed());
-            eprintln!("  Total time: {:?}", start.elapsed());
+            eprintln!("  Template formatting: {:?} ({:.1}%)", template_start.elapsed(),
+                (template_start.elapsed().as_nanos() as f64 / total_nanos * 100.0));
+            eprintln!("  Total time: {:?}", total_duration);
         }
 
         Ok(())
