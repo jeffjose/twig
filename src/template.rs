@@ -107,7 +107,7 @@ fn process_variables(
 ) -> Result<String, TemplateError> {
     let mut result = template.to_string();
 
-    // Process colored variables first
+    // Process colored variables first (including quoted text)
     for (name, value) in variables {
         let pattern = format!("{{{}:", name);
         let mut position = 0;
@@ -123,6 +123,41 @@ fn process_variables(
                 position = start + colored_value.len();
             }
         }
+    }
+
+    // Process quoted text (both colored and uncolored)
+    let mut position = 0;
+    let mut replacements = Vec::new();
+
+    while let Some(start) = result[position..].find("{\"") {
+        let start = start + position;
+        if let Some(quote_end) = result[start + 2..].find('\"') {
+            let quote_end = start + 2 + quote_end;
+            let text = &result[start + 2..quote_end];
+            
+            // Check if there's a color specification
+            if result[quote_end + 1..].starts_with(':') {
+                if let Some(end) = result[quote_end + 1..].find('}') {
+                    let end = quote_end + 1 + end;
+                    let color = &result[quote_end + 2..end];
+                    let colored_text = apply_color(text, color, show_warnings, mode)?;
+                    replacements.push((start..end + 1, colored_text));
+                    position = end + 1;
+                    continue;
+                }
+            } else if result[quote_end + 1..].starts_with('}') {
+                // No color specification, just replace the quoted text
+                replacements.push((start..quote_end + 2, text.to_string()));
+                position = quote_end + 2;
+                continue;
+            }
+        }
+        position = start + 1;
+    }
+
+    // Apply replacements in reverse order to maintain correct indices
+    for (range, replacement) in replacements.into_iter().rev() {
+        result.replace_range(range, &replacement);
     }
 
     // Then process non-colored variables
@@ -142,11 +177,10 @@ fn process_variables(
             let var_spec = &result[start..=end];
             let var_name = var_spec[1..end - start].split(':').next().unwrap_or("");
 
-            if show_warnings {
+            if show_warnings && !var_name.starts_with('\"') {
                 eprintln!("Warning: undefined variable '{}'", var_name);
             }
 
-            // Instead of replacing with empty string, just advance the position
             pos = end + 1;
         } else {
             pos = start + 1;

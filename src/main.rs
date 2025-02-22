@@ -7,6 +7,7 @@ use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fs;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -278,6 +279,29 @@ fn get_env_vars_from_format(format: &str) -> Vec<String> {
     env_vars
 }
 
+// First, create structs to hold the raw data
+struct SystemData {
+    hostname: Result<String, hostname::HostnameError>,
+    ip: Result<IpAddr, ip::IpConfigError>,
+    cwd: Result<String, cwd::CwdError>,
+    // Add other expensive data here
+}
+
+// Add these counters at the module level
+#[derive(Default)]
+struct FetchCounts {
+    hostname: usize,
+    ip: usize,
+    cwd: usize,
+}
+
+// Add timing structs
+struct TimingData {
+    fetch_time: std::time::Duration,
+    format_time: std::time::Duration,
+    fetch_count: usize,
+}
+
 #[tokio::main]
 async fn main() {
     let start = Instant::now();
@@ -308,11 +332,20 @@ async fn main() {
         // Handle time variables
         let config_clone = Arc::clone(&config);
         tasks.push(tokio::spawn(async move {
-            let start = Instant::now();
+            let mut timing = TimingData {
+                fetch_time: std::time::Duration::default(),
+                format_time: std::time::Duration::default(),
+                fetch_count: 0,
+            };
+
+            let format_start = Instant::now();
             let mut time_vars = Vec::new();
             for (i, time_config) in config_clone.time.iter().enumerate() {
+                let fetch_start = Instant::now();
                 match format_current_time(&time_config.format) {
                     Ok(time) => {
+                        timing.fetch_time += fetch_start.elapsed();
+                        timing.fetch_count += 1;
                         let var_name = get_var_name(time_config, "time", i);
                         time_vars.push((var_name, time));
                     }
@@ -323,7 +356,9 @@ async fn main() {
                     }
                 }
             }
-            (time_vars, start.elapsed())
+            timing.format_time = format_start.elapsed();
+
+            (time_vars, timing)
         }));
         task_names.push("Time variables");
 
@@ -331,14 +366,28 @@ async fn main() {
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
         tasks.push(tokio::spawn(async move {
-            let start = Instant::now();
+            let mut timing = TimingData {
+                fetch_time: std::time::Duration::default(),
+                format_time: std::time::Duration::default(),
+                fetch_count: 0,
+            };
+
+            // Get hostname once - time the fetch
+            let fetch_start = Instant::now();
+            let hostname_data = hostname::get_hostname(&hostname::Config::default());
+            timing.fetch_time = fetch_start.elapsed();
+            timing.fetch_count = 1;
+
+            // Time the formatting separately
+            let format_start = Instant::now();
             let mut hostname_vars = Vec::new();
             for (i, hostname_config) in config_clone.hostname.iter().enumerate() {
                 let var_name = get_var_name(hostname_config, "hostname", i);
                 if format_uses_variable(&format_clone, &var_name) {
-                    match hostname::get_hostname(hostname_config) {
+                    match &hostname_data {
                         Ok(hostname) => {
-                            hostname_vars.push((var_name, hostname));
+                            // Here we're just doing string operations, not expensive syscalls
+                            hostname_vars.push((var_name, hostname.clone()));
                         }
                         Err(e) => {
                             if validate {
@@ -348,7 +397,10 @@ async fn main() {
                     }
                 }
             }
-            (hostname_vars, start.elapsed())
+            timing.format_time = format_start.elapsed();
+
+            // Return timing info along with vars
+            (hostname_vars, timing)
         }));
         task_names.push("Hostname variables");
 
@@ -356,12 +408,29 @@ async fn main() {
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
         tasks.push(tokio::spawn(async move {
-            let start = Instant::now();
+            let mut timing = TimingData {
+                fetch_time: std::time::Duration::default(),
+                format_time: std::time::Duration::default(),
+                fetch_count: 0,
+            };
+
+            // Get IP data once - this is the expensive part
+            let fetch_start = Instant::now();
+            let ip_data = match &config_clone.ip.iter().find(|c| c.interface.is_some()) {
+                Some(config) => ip::get_ip(config),  // Use first interface config if any
+                None => local_ip_address::local_ip()
+                    .map_err(|e| ip::IpConfigError::Lookup(e.to_string()))
+            };
+            timing.fetch_time = fetch_start.elapsed();
+            timing.fetch_count = 1;
+
+            // Format for each config - this is just string manipulation
+            let format_start = Instant::now();
             let mut ip_vars = Vec::new();
             for (i, ip_config) in config_clone.ip.iter().enumerate() {
                 let var_name = get_var_name(ip_config, "ip", i);
                 if format_uses_variable(&format_clone, &var_name) {
-                    match ip::get_ip(ip_config) {
+                    match &ip_data {
                         Ok(ip) => {
                             ip_vars.push((var_name, ip.to_string()));
                         }
@@ -373,7 +442,9 @@ async fn main() {
                     }
                 }
             }
-            (ip_vars, start.elapsed())
+            timing.format_time = format_start.elapsed();
+
+            (ip_vars, timing)
         }));
         task_names.push("IP variables");
 
@@ -381,13 +452,22 @@ async fn main() {
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
         tasks.push(tokio::spawn(async move {
-            let start = Instant::now();
+            let mut timing = TimingData {
+                fetch_time: std::time::Duration::default(),
+                format_time: std::time::Duration::default(),
+                fetch_count: 0,
+            };
+
+            let format_start = Instant::now();
             let mut cwd_vars = Vec::new();
             for (i, cwd_config) in config_clone.cwd.iter().enumerate() {
                 let var_name = get_var_name(cwd_config, "cwd", i);
                 if format_uses_variable(&format_clone, &var_name) {
+                    let fetch_start = Instant::now();
                     match cwd::get_cwd(cwd_config) {
                         Ok(dir) => {
+                            timing.fetch_time += fetch_start.elapsed();
+                            timing.fetch_count += 1;
                             cwd_vars.push((var_name, dir));
                         }
                         Err(e) => {
@@ -398,23 +478,34 @@ async fn main() {
                     }
                 }
             }
-            (cwd_vars, start.elapsed())
+            timing.format_time = format_start.elapsed();
+
+            (cwd_vars, timing)
         }));
         task_names.push("CWD variables");
 
         // Handle environment variables
         let format_clone = prompt_format.clone();
         tasks.push(tokio::spawn(async move {
-            let start = Instant::now();
-            let mut env_vars = Vec::new();
+            let mut timing = TimingData {
+                fetch_time: std::time::Duration::default(),
+                format_time: std::time::Duration::default(),
+                fetch_count: 0,
+            };
 
+            let format_start = Instant::now();
+            let mut env_vars = Vec::new();
             for var_name in get_env_vars_from_format(&format_clone) {
+                let fetch_start = Instant::now();
                 if let Ok(value) = env::var(&var_name) {
+                    timing.fetch_time += fetch_start.elapsed();
+                    timing.fetch_count += 1;
                     env_vars.push((format!("${}", var_name), value));
                 }
             }
+            timing.format_time = format_start.elapsed();
 
-            (env_vars, start.elapsed())
+            (env_vars, timing)
         }));
         task_names.push("Environment variables");
 
@@ -425,9 +516,9 @@ async fn main() {
 
         for (result, task_name) in results.into_iter().zip(task_names.iter()) {
             match result {
-                Ok((mut vars, duration)) => {
+                Ok((mut vars, timing)) => {
                     variables.append(&mut vars);
-                    task_timings.push((task_name, duration));
+                    task_timings.push((task_name, timing));
                 }
                 Err(e) => {
                     if validate {
@@ -461,13 +552,21 @@ async fn main() {
             eprintln!("\nTiming information:");
             eprintln!("  Config loading: {:?} ({:.1}%)", config_duration, 
                 (config_duration.as_nanos() as f64 / total_nanos * 100.0));
+            
             eprintln!("  Variable gathering (total): {:?} ({:.1}%)", vars_duration,
                 (vars_duration.as_nanos() as f64 / total_nanos * 100.0));
-            eprintln!("    Parallel task timings:");
-            for (name, duration) in task_timings {
-                eprintln!("      {}: {:?} ({:.1}%)", name, duration,
-                    (duration.as_nanos() as f64 / total_nanos * 100.0));
+            eprintln!("    Parallel task details:");
+            for (name, timing_data) in task_timings {
+                eprintln!("      {}: ", name);
+                eprintln!("        Data fetch ({} times): {:?} ({:.1}%)", 
+                    timing_data.fetch_count,
+                    timing_data.fetch_time,
+                    (timing_data.fetch_time.as_nanos() as f64 / total_nanos * 100.0));
+                eprintln!("        Formatting: {:?} ({:.1}%)",
+                    timing_data.format_time,
+                    (timing_data.format_time.as_nanos() as f64 / total_nanos * 100.0));
             }
+            
             eprintln!("  Template formatting: {:?} ({:.1}%)", template_start.elapsed(),
                 (template_start.elapsed().as_nanos() as f64 / total_nanos * 100.0));
             eprintln!("  Total time: {:?}", total_duration);

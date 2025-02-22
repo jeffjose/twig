@@ -1,6 +1,12 @@
 [[time]]
 # Basic time format (default if not specified)
+name = "datetime"
 format = "%H:%M:%S"
+
+[[time]]
+# Basic time format (default if not specified)
+name = "t"
+format = "(%H:%M:%S)"
 
 # Or you can use these alternative formats:
 # Full date and time with 12-hour clock
@@ -32,13 +38,16 @@ shorten = false
 # Available variables with optional colors:
 # {var} or {var:color} - For configured variables
 # {$ENV_VAR} or {$ENV_VAR:color} - For environment variables
+# {"text"} or {"text":color} - For literal text
 # Colors: red, green, yellow, blue, magenta, cyan, white
 #         bright_red, bright_green, bright_yellow, bright_blue,
 #         bright_magenta, bright_cyan, bright_white
 # Multi-line format example
 format = """
--({time:cyan} {host:magenta} {local:magenta} {dir:green} {$USER:yellow})-
-# """
+{"→":cyan}
+-({datetime:cyan} {t} {host:magenta} {local:magenta} {dir:green} {$USER:yellow})-
+#
+"""
 
 # Or another example:
 # format = '''
