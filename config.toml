@@ -35,18 +35,26 @@ name = "dir"
 shorten = false
 
 [prompt]
-# Available variables with optional colors:
-# {var} or {var:color} - For configured variables
-# {$ENV_VAR} or {$ENV_VAR:color} - For environment variables
-# {"text"} or {"text":color} - For literal text
+# Available variables with optional formatting:
+# {var} or {var:format} - For configured variables
+# {$ENV_VAR} or {$ENV_VAR:format} - For environment variables
+# {"text"} or {"text":format} - For literal text
+#
+# Format can be a comma-separated list of:
 # Colors: red, green, yellow, blue, magenta, cyan, white
 #         bright_red, bright_green, bright_yellow, bright_blue,
 #         bright_magenta, bright_cyan, bright_white
-# Multi-line format example
-format = """
-{"→":cyan}
--({datetime:cyan} {t} {host:magenta} {local:magenta} {dir:green} {$USER:yellow})-
+# Styles: bold, italic, normal
 #
+# Examples:
+# {"→":cyan,bold}         - Bold cyan arrow
+# {"Warning":red,italic}  - Italic red text
+# {time:green,bold}       - Bold green time
+# {$USER:yellow,normal}   - Normal yellow username
+format = """
+{"→":cyan} {"normal"} {"bold":red,bold} {"italic":yellow,italic}
+-({datetime:cyan} {t} {host:magenta} {local:magenta} {dir:green} {$USER:yellow})-
+{"#":red}
 """
 
 # Or another example:

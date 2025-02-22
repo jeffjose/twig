@@ -85,6 +85,64 @@ fn apply_color(
     }
 }
 
+fn apply_format(
+    text: &str,
+    format_str: &str,
+    show_warnings: bool,
+    mode: Option<&str>,
+) -> Result<String, TemplateError> {
+    match mode {
+        Some("tcsh") => {
+            // TODO: Implement tcsh formatting
+            Ok(text.to_string())
+        }
+        None => {
+            let formats: Vec<&str> = format_str.split(',').map(str::trim).collect();
+            let mut colored = text.normal(); // Start with normal style
+            
+            for fmt in formats {
+                colored = match fmt {
+                    // Colors
+                    "red" => colored.red(),
+                    "green" => colored.green(),
+                    "yellow" => colored.yellow(),
+                    "blue" => colored.blue(),
+                    "magenta" => colored.magenta(),
+                    "cyan" => colored.cyan(),
+                    "white" => colored.white(),
+                    "bright_red" => colored.bright_red(),
+                    "bright_green" => colored.bright_green(),
+                    "bright_yellow" => colored.bright_yellow(),
+                    "bright_blue" => colored.bright_blue(),
+                    "bright_magenta" => colored.bright_magenta(),
+                    "bright_cyan" => colored.bright_cyan(),
+                    "bright_white" => colored.bright_white(),
+                    // Styles
+                    "bold" => colored.bold(),
+                    "italic" => colored.italic(),
+                    "normal" => colored.normal(),
+                    unknown => {
+                        if show_warnings {
+                            eprintln!("Warning: unknown format '{}', ignoring", unknown);
+                        }
+                        colored
+                    }
+                };
+            }
+            Ok(colored.to_string())
+        }
+        Some(unknown_mode) => {
+            if show_warnings {
+                eprintln!(
+                    "Warning: unknown mode '{}', using default formatting",
+                    unknown_mode
+                );
+            }
+            apply_format(text, format_str, show_warnings, None)
+        }
+    }
+}
+
 fn validate_variables(template: &str, _variables: &[(&str, &str)]) -> Result<(), TemplateError> {
     // Only validate syntax (unclosed braces)
     let mut pos = 0;
@@ -118,7 +176,7 @@ fn process_variables(
             if let Some(end) = result[after_var..].find('}') {
                 let end = end + after_var;
                 let color = &result[after_var..end];
-                let colored_value = apply_color(value, color, show_warnings, mode)?;
+                let colored_value = apply_format(value, color, show_warnings, mode)?;
                 result.replace_range(start..end + 1, &colored_value);
                 position = start + colored_value.len();
             }
@@ -140,8 +198,8 @@ fn process_variables(
                 if let Some(end) = result[quote_end + 1..].find('}') {
                     let end = quote_end + 1 + end;
                     let color = &result[quote_end + 2..end];
-                    let colored_text = apply_color(text, color, show_warnings, mode)?;
-                    replacements.push((start..end + 1, colored_text));
+                    let formatted_text = apply_format(text, color, show_warnings, mode)?;
+                    replacements.push((start..end + 1, formatted_text));
                     position = end + 1;
                     continue;
                 }
