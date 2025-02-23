@@ -982,6 +982,7 @@ dependencies = [
  "futures",
  "hostname",
  "local-ip-address",
+ "regex",
  "rstest",
  "serde",
  "serde_json",
