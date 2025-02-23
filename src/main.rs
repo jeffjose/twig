@@ -8,6 +8,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
+use std::process;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 use tokio;
@@ -56,6 +57,14 @@ struct Cli {
     /// Show all available colors and styles
     #[arg(long)]
     colors: bool,
+
+    /// Run as a daemon that collects and caches information
+    #[arg(short = 'd', long = "daemon", alias = "daemon")]
+    daemon: bool,
+
+    /// When used with -d, run daemon in foreground instead of background
+    #[arg(long = "fg", alias = "foreground")]
+    fg: bool,
 }
 
 #[derive(Debug)]
@@ -129,6 +138,23 @@ struct CacheConfig {
     enabled: bool,
     #[serde(default = "default_cache_duration")]
     duration: u64,
+    #[serde(
+        default = "default_daemon_frequency",
+        deserialize_with = "validate_daemon_frequency"
+    )]
+    daemon_frequency: u64,
+}
+
+fn validate_daemon_frequency<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u64::deserialize(deserializer)?;
+    if value == 0 {
+        Ok(default_daemon_frequency())
+    } else {
+        Ok(value)
+    }
 }
 
 fn default_format() -> String {
@@ -137,6 +163,10 @@ fn default_format() -> String {
 
 fn default_cache_duration() -> u64 {
     30 // Default to 30 seconds
+}
+
+fn default_daemon_frequency() -> u64 {
+    1 // Default to 1 second
 }
 
 fn get_config_path(cli_config: &Option<PathBuf>) -> Result<PathBuf, ConfigError> {
@@ -177,6 +207,7 @@ format = "{time}"
 [cache]
 enabled = true
 duration = 30
+daemon_frequency = 1  # How often the daemon updates data (in seconds)
 "#;
         fs::write(config_path, default_config)?;
     }
@@ -321,6 +352,30 @@ async fn main() {
 
     if cli.colors {
         colors::print_color_test();
+        return;
+    }
+
+    // Handle daemon mode
+    if cli.daemon {
+        if !cli.fg {
+            // Fork to background if not in foreground mode
+            match unsafe { libc::fork() } {
+                -1 => {
+                    eprintln!("Failed to fork process");
+                    process::exit(1);
+                }
+                0 => {
+                    // Child process continues
+                }
+                _ => {
+                    // Parent process exits
+                    process::exit(0);
+                }
+            }
+        }
+
+        // Run the daemon loop
+        run_daemon(&cli).await;
         return;
     }
 
@@ -843,5 +898,393 @@ async fn main() {
             eprintln!("Error: {}", e);
         }
         std::process::exit(1);
+    }
+}
+
+async fn run_daemon(cli: &Cli) {
+    println!("Starting twig daemon...");
+
+    // Get config path and ensure it exists
+    let config_path = match get_config_path(&cli.config) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("Failed to get config path: {}", e);
+            process::exit(1);
+        }
+    };
+
+    ensure_config_exists(&config_path).unwrap_or_else(|e| {
+        eprintln!("Failed to ensure config exists: {}", e);
+        process::exit(1);
+    });
+
+    let config = match load_config(&config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Failed to load config: {}", e);
+            process::exit(1);
+        }
+    };
+
+    let config = Arc::new(config);
+    let global_cache = Arc::new(tokio::sync::Mutex::new(GlobalCache::default()));
+
+    // Ensure data.json parent directory exists
+    if let Some(parent) = config_path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("Failed to create data directory: {}", e);
+            process::exit(1);
+        }
+    }
+
+    println!(
+        "Daemon will update data every {} seconds",
+        config.cache.daemon_frequency
+    );
+
+    // Create a channel for shutdown signal
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+
+    // Handle Ctrl+C for graceful shutdown
+    let shutdown_tx_clone = shutdown_tx.clone();
+    tokio::spawn(async move {
+        if let Ok(()) = tokio::signal::ctrl_c().await {
+            println!("\nReceived Ctrl+C, shutting down...");
+            let _ = shutdown_tx_clone.send(()).await;
+        }
+    });
+
+    // Main daemon loop with proper shutdown handling
+    loop {
+        let config = Arc::clone(&config);
+        let global_cache = Arc::clone(&global_cache);
+
+        tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(config.cache.daemon_frequency)) => {
+                // Collect all data
+                let mut cache = global_cache.lock().await;
+
+                // Update hostname
+                if let Ok(hostname) = hostname::get_hostname(&hostname::Config::default()) {
+                    cache.set_hostname(hostname);
+                }
+
+                // Update IP
+                if let Ok(ip) = local_ip_address::local_ip() {
+                    cache.set_ip(ip);
+                }
+
+                // Update power info
+                if let Ok(mut info) = power::get_battery_info_internal() {
+                    info.cached_at = SystemTime::now();
+                    cache.set_power(info);
+                }
+
+                // Save to both cache.json and data.json
+                if let Err(e) = cache.save() {
+                    eprintln!("Failed to save cache: {}", e);
+                }
+
+                // Save to data.json as well
+                let data_path = config_path.parent().unwrap().join("data.json");
+                if let Err(e) = fs::write(&data_path, serde_json::to_string_pretty(&*cache).unwrap()) {
+                    eprintln!("Failed to save data: {}", e);
+                }
+
+                drop(cache);
+            }
+            _ = shutdown_rx.recv() => {
+                println!("Shutting down daemon...");
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_daemon_data_file() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let data_path = temp_dir.path().join("data.json");
+
+        // Create a minimal config file with custom daemon frequency
+        let config_content = r#"
+[cache]
+enabled = true
+duration = 30
+daemon_frequency = 2  # Update every 2 seconds
+"#;
+        fs::write(&config_path, config_content).unwrap();
+
+        // Create CLI args for daemon mode
+        let args = Cli {
+            timing: false,
+            config: Some(config_path.clone()),
+            mode: None,
+            validate: false,
+            colors: false,
+            daemon: true,
+            fg: true,
+        };
+
+        // Create shutdown channel
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let shutdown_tx_clone = shutdown_tx.clone();
+
+        // Run daemon in a separate task
+        let handle = tokio::spawn(async move {
+            tokio::select! {
+                _ = run_daemon(&args) => {},
+                _ = shutdown_rx.recv() => {}
+            }
+        });
+
+        // Wait a bit for the daemon to run
+        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+        // Send shutdown signal
+        shutdown_tx_clone.send(()).await.unwrap();
+
+        // Wait for daemon to stop
+        handle.await.unwrap();
+
+        // Check that data.json was created
+        assert!(data_path.exists());
+
+        // Verify data.json contains expected fields
+        let data_content = fs::read_to_string(data_path).unwrap();
+        let data: serde_json::Value = serde_json::from_str(&data_content).unwrap();
+
+        assert!(data.get("hostname").is_some());
+        assert!(data.get("ip").is_some());
+        assert!(data.get("power").is_some());
+    }
+
+    #[test]
+    fn test_cli_flags() {
+        // Test short form
+        let args = vec!["twig", "-d"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(cli.daemon);
+        assert!(!cli.fg);
+
+        // Test long form
+        let args = vec!["twig", "--daemon"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(cli.daemon);
+        assert!(!cli.fg);
+
+        // Test short form with fg
+        let args = vec!["twig", "-d", "--fg"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(cli.daemon);
+        assert!(cli.fg);
+
+        // Test long form with fg
+        let args = vec!["twig", "--daemon", "--fg"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(cli.daemon);
+        assert!(cli.fg);
+
+        // Test with foreground alias
+        let args = vec!["twig", "-d", "--foreground"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(cli.daemon);
+        assert!(cli.fg);
+
+        // Test all long form
+        let args = vec!["twig", "--daemon", "--foreground"];
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(cli.daemon);
+        assert!(cli.fg);
+    }
+
+    #[test]
+    fn test_daemon_frequency_config() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+
+        // Test default frequency
+        let config_content = r#"
+[cache]
+enabled = true
+duration = 30
+"#;
+        fs::write(&config_path, config_content).unwrap();
+        let config = load_config(&config_path).unwrap();
+        assert_eq!(config.cache.daemon_frequency, 1); // Default is 1 second
+
+        // Test custom frequency
+        let config_content = r#"
+[cache]
+enabled = true
+duration = 30
+daemon_frequency = 5
+"#;
+        fs::write(&config_path, config_content).unwrap();
+        let config = load_config(&config_path).unwrap();
+        assert_eq!(config.cache.daemon_frequency, 5);
+    }
+
+    #[tokio::test]
+    async fn test_daemon_data_updates() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let data_path = temp_dir.path().join("data.json");
+
+        // Create config with very short update frequency
+        let config_content = r#"
+[cache]
+enabled = true
+duration = 30
+daemon_frequency = 1
+"#;
+        fs::write(&config_path, config_content).unwrap();
+
+        let args = Cli {
+            timing: false,
+            config: Some(config_path.clone()),
+            mode: None,
+            validate: false,
+            colors: false,
+            daemon: true,
+            fg: true,
+        };
+
+        // Create shutdown channel
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let shutdown_tx_clone = shutdown_tx.clone();
+
+        // Run daemon in a separate task
+        let handle = tokio::spawn(async move {
+            tokio::select! {
+                _ = run_daemon(&args) => {},
+                _ = shutdown_rx.recv() => {}
+            }
+        });
+
+        // Wait for data.json to be created (up to 5 seconds)
+        let mut attempts = 0;
+        while !data_path.exists() && attempts < 50 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            attempts += 1;
+        }
+        assert!(
+            data_path.exists(),
+            "data.json was not created within timeout"
+        );
+
+        // Check initial data
+        let data1 = fs::read_to_string(&data_path).unwrap();
+
+        // Wait for at least one update cycle plus a small buffer
+        tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+        let data2 = fs::read_to_string(&data_path).unwrap();
+
+        // Data should be different (timestamps should have changed)
+        assert_ne!(data1, data2, "Data should be updated between checks");
+
+        // Send shutdown signal
+        shutdown_tx_clone.send(()).await.unwrap();
+
+        // Wait for daemon to stop
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_daemon_respects_frequency() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let data_path = temp_dir.path().join("data.json");
+
+        // Create config with 2 second update frequency
+        let config_content = r#"
+[cache]
+enabled = true
+duration = 30
+daemon_frequency = 2
+"#;
+        fs::write(&config_path, config_content).unwrap();
+
+        let args = Cli {
+            timing: false,
+            config: Some(config_path.clone()),
+            mode: None,
+            validate: false,
+            colors: false,
+            daemon: true,
+            fg: true,
+        };
+
+        // Create shutdown channel
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let shutdown_tx_clone = shutdown_tx.clone();
+
+        // Run daemon in a separate task
+        let handle = tokio::spawn(async move {
+            tokio::select! {
+                _ = run_daemon(&args) => {},
+                _ = shutdown_rx.recv() => {}
+            }
+        });
+
+        // Wait for data.json to be created (up to 5 seconds)
+        let mut attempts = 0;
+        while !data_path.exists() && attempts < 50 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            attempts += 1;
+        }
+        assert!(
+            data_path.exists(),
+            "data.json was not created within timeout"
+        );
+
+        // Check after 1 second (should have initial data)
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        let data1 = fs::read_to_string(&data_path).unwrap();
+
+        // Check just before next update
+        tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+        let data2 = fs::read_to_string(&data_path).unwrap();
+        assert_eq!(
+            data1, data2,
+            "Data should not update before frequency interval"
+        );
+
+        // Check after frequency duration (should have new data)
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        let data3 = fs::read_to_string(&data_path).unwrap();
+        assert_ne!(data1, data3, "Data should update after frequency interval");
+
+        // Send shutdown signal
+        shutdown_tx_clone.send(()).await.unwrap();
+
+        // Wait for daemon to stop
+        handle.await.unwrap();
+    }
+
+    #[test]
+    fn test_daemon_invalid_config() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+
+        // Test with invalid daemon_frequency
+        let config_content = r#"
+[cache]
+enabled = true
+duration = 30
+daemon_frequency = 0  # Invalid: should be > 0
+"#;
+        fs::write(&config_path, config_content).unwrap();
+        let config = load_config(&config_path).unwrap();
+
+        // Should fall back to default frequency
+        assert_eq!(config.cache.daemon_frequency, 1);
     }
 }

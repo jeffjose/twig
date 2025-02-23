@@ -21,3 +21,4 @@ tempfile = "3.10"
 battery = "0.7.8"                                  # Cross-platform battery information
 lazy_static = "1.4"                                # For static initialization
 parking_lot = "0.12"                               # For fast, simple mutex
+libc = "0.2"                                       # For Unix system calls
