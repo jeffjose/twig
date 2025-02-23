@@ -150,7 +150,6 @@ fn get_config_path(cli_config: &Option<PathBuf>) -> Result<PathBuf, ConfigError>
             .map(|base_dirs| base_dirs.config_dir().join("twig").join("config.toml"))
             .ok_or(ConfigError::NoConfigDir)?
     };
-    eprintln!("Using config file: {:?}", path);
     Ok(path)
 }
 
@@ -171,24 +170,12 @@ fn ensure_config_exists(config_path: &PathBuf) -> Result<(), ConfigError> {
         let default_config = r#"[[time]]
 format = "%H:%M:%S"
 
-[[time]]
-name = "utc"
-format = "%H:%M:%S UTC"
-
-[[hostname]]
-name = "short"
-# Hostname-specific options could go here
-
-[[ip]]
-name = "local"
-# IP-specific options could go here
-
-[[cwd]]
-name = "path"
-shorten = false
-
 [prompt]
-format = "[{short:cyan}:{path:blue}] {time:green} ({utc:yellow})"
+format = "{time}"
+
+[cache]
+enabled = true
+duration = 30
 "#;
         fs::write(config_path, default_config)?;
     }
@@ -225,12 +212,6 @@ fn load_config(config_path: &PathBuf) -> Result<Config, ConfigError> {
     let content = fs::read_to_string(config_path)?;
     let config: Config = toml::from_str(&content)?;
 
-    // Debug logging for cache settings
-    eprintln!(
-        "Loaded config - Cache settings: enabled={}, duration={}s",
-        config.cache.enabled, config.cache.duration
-    );
-
     // Validate that multiple sections have names
     validate_section_names(&config.time, "time")?;
     validate_section_names(&config.hostname, "hostname")?;
@@ -238,7 +219,6 @@ fn load_config(config_path: &PathBuf) -> Result<Config, ConfigError> {
     validate_section_names(&config.cwd, "cwd")?;
     validate_section_names(&config.power, "power")?;
 
-    validate_time_format(&config.time[0].format)?;
     Ok(config)
 }
 
@@ -553,119 +533,119 @@ async fn main() {
             let fetch_start = Instant::now();
 
             // Get battery info once with caching
-            let power_config = &config_clone.power[0];
-            let cache_enabled = power_config
-                .cache_enabled
-                .unwrap_or(config_clone.cache.enabled);
-            let cache_duration = power_config
-                .cache_duration
-                .unwrap_or(config_clone.cache.duration);
+            if !config_clone.power.is_empty() {
+                let power_config = &config_clone.power[0];
+                let cache_enabled = power_config
+                    .cache_enabled
+                    .unwrap_or(config_clone.cache.enabled);
+                let cache_duration = power_config
+                    .cache_duration
+                    .unwrap_or(config_clone.cache.duration);
 
-            let mut global_cache = global_cache_clone.lock().await;
-            let battery_info: Result<power::BatteryInfo, power::PowerError> =
-                match global_cache.get_power(cache_duration) {
-                    Some(cached) => {
-                        eprintln!("Using cached battery info");
-                        Ok(cached.clone())
-                    }
-                    None => {
-                        eprintln!("Getting fresh battery info");
-                        let mut info = power::get_battery_info_internal()?;
-                        info.cached_at = SystemTime::now();
-                        global_cache.set_power(info.clone());
-                        if let Err(e) = global_cache.save() {
-                            eprintln!("Warning: failed to save cache: {}", e);
-                        }
-                        Ok(info)
-                    }
-                };
-            timing.fetch_time = fetch_start.elapsed();
-            timing.fetch_count = 1;
-
-            drop(global_cache); // Release the lock
-
-            let format_start = Instant::now();
-
-            // Pre-format common values once
-            let formatted_values = if let Ok(info) = &battery_info {
-                Some((
-                    info.percentage.to_string(),
-                    info.status.clone(),
-                    info.time_left.clone(),
-                    if info.power_now.abs() < 0.01 {
-                        "0.0".to_string()
-                    } else {
-                        format!("{:+.1}", info.power_now)
-                    },
-                    format!("{:.1}", info.energy_now),
-                    format!("{:.1}", info.energy_full),
-                    format!("{:.1}", info.voltage),
-                    format!("{:.1}", info.temperature),
-                    info.capacity.to_string(),
-                    info.cycle_count.to_string(),
-                    info.technology.clone(),
-                    info.manufacturer.clone(),
-                    info.model.clone(),
-                    info.serial.clone(),
-                ))
-            } else {
-                None
-            };
-
-            for (i, power_config) in config_clone.power.iter().enumerate() {
-                let var_name = get_var_name(power_config, "power", i);
-                if format_uses_variable(&format_clone, &var_name) {
-                    match &battery_info {
-                        Ok(_) => {
-                            if let Some((
-                                percentage,
-                                status,
-                                time_left,
-                                power_now,
-                                energy_now,
-                                energy_full,
-                                voltage,
-                                temperature,
-                                capacity,
-                                cycle_count,
-                                technology,
-                                manufacturer,
-                                model,
-                                serial,
-                            )) = &formatted_values
-                            {
-                                // Use pre-formatted values
-                                let formatted = power_config
-                                    .format
-                                    .replace("{percentage}", percentage)
-                                    .replace("{status}", status)
-                                    .replace("{time_left}", time_left)
-                                    .replace("{power_now}", power_now)
-                                    .replace("{energy_now}", energy_now)
-                                    .replace("{energy_full}", energy_full)
-                                    .replace("{voltage}", voltage)
-                                    .replace("{temperature}", temperature)
-                                    .replace("{capacity}", capacity)
-                                    .replace("{cycle_count}", cycle_count)
-                                    .replace("{technology}", technology)
-                                    .replace("{manufacturer}", manufacturer)
-                                    .replace("{model}", model)
-                                    .replace("{serial}", serial);
-                                power_vars.push((var_name, formatted));
+                let mut global_cache = global_cache_clone.lock().await;
+                let battery_info: Result<power::BatteryInfo, power::PowerError> =
+                    match global_cache.get_power(cache_duration) {
+                        Some(cached) => Ok(cached.clone()),
+                        None => {
+                            let mut info = power::get_battery_info_internal()?;
+                            info.cached_at = SystemTime::now();
+                            global_cache.set_power(info.clone());
+                            if let Err(e) = global_cache.save() {
+                                if validate {
+                                    eprintln!("Warning: failed to save cache: {}", e);
+                                }
                             }
+                            Ok(info)
                         }
-                        Err(e) => {
-                            if validate {
-                                eprintln!("Warning: couldn't get battery info: {}", e);
-                            }
-                            power_vars.push((var_name, String::from("N/A")));
-                        }
-                    }
+                    };
+                timing.fetch_time = fetch_start.elapsed();
+                timing.fetch_count = 1;
+
+                drop(global_cache); // Release the lock
+
+                let format_start = Instant::now();
+
+                // Pre-format common values once
+                let formatted_values = if let Ok(info) = &battery_info {
+                    Some((
+                        info.percentage.to_string(),
+                        info.status.clone(),
+                        info.time_left.clone(),
+                        if info.power_now.abs() < 0.01 {
+                            "0.0".to_string()
+                        } else {
+                            format!("{:+.1}", info.power_now)
+                        },
+                        format!("{:.1}", info.energy_now),
+                        format!("{:.1}", info.energy_full),
+                        format!("{:.1}", info.voltage),
+                        format!("{:.1}", info.temperature),
+                        info.capacity.to_string(),
+                        info.cycle_count.to_string(),
+                        info.technology.clone(),
+                        info.manufacturer.clone(),
+                        info.model.clone(),
+                        info.serial.clone(),
+                    ))
                 } else {
-                    timing.skip_count += 1;
+                    None
+                };
+
+                for (i, power_config) in config_clone.power.iter().enumerate() {
+                    let var_name = get_var_name(power_config, "power", i);
+                    if format_uses_variable(&format_clone, &var_name) {
+                        match &battery_info {
+                            Ok(_) => {
+                                if let Some((
+                                    percentage,
+                                    status,
+                                    time_left,
+                                    power_now,
+                                    energy_now,
+                                    energy_full,
+                                    voltage,
+                                    temperature,
+                                    capacity,
+                                    cycle_count,
+                                    technology,
+                                    manufacturer,
+                                    model,
+                                    serial,
+                                )) = &formatted_values
+                                {
+                                    // Use pre-formatted values
+                                    let formatted = power_config
+                                        .format
+                                        .replace("{percentage}", percentage)
+                                        .replace("{status}", status)
+                                        .replace("{time_left}", time_left)
+                                        .replace("{power_now}", power_now)
+                                        .replace("{energy_now}", energy_now)
+                                        .replace("{energy_full}", energy_full)
+                                        .replace("{voltage}", voltage)
+                                        .replace("{temperature}", temperature)
+                                        .replace("{capacity}", capacity)
+                                        .replace("{cycle_count}", cycle_count)
+                                        .replace("{technology}", technology)
+                                        .replace("{manufacturer}", manufacturer)
+                                        .replace("{model}", model)
+                                        .replace("{serial}", serial);
+                                    power_vars.push((var_name, formatted));
+                                }
+                            }
+                            Err(e) => {
+                                if validate {
+                                    eprintln!("Warning: couldn't get battery info: {}", e);
+                                }
+                                power_vars.push((var_name, String::from("N/A")));
+                            }
+                        }
+                    } else {
+                        timing.skip_count += 1;
+                    }
                 }
             }
-            timing.format_time = format_start.elapsed();
+            timing.format_time = fetch_start.elapsed();
 
             Ok((power_vars, timing))
         }));
@@ -756,8 +736,18 @@ async fn main() {
                 vars_duration,
                 (vars_duration.as_nanos() as f64 / total_nanos * 100.0)
             );
-            eprintln!("    Parallel task details:");
-            for (name, timing_data) in task_timings {
+            eprintln!("    Parallel task details (fastest to slowest):");
+
+            // Sort task timings by total time (fetch + format)
+            let mut sorted_timings: Vec<_> = task_timings.into_iter().collect();
+            sorted_timings.sort_by(|(_, a), (_, b)| {
+                let a_total = a.fetch_time + a.format_time;
+                let b_total = b.fetch_time + b.format_time;
+                a_total.cmp(&b_total)
+            });
+
+            for (name, timing_data) in sorted_timings {
+                let total_time = timing_data.fetch_time + timing_data.format_time;
                 eprintln!("      {}: ", name);
                 eprintln!(
                     "        Data fetch ({} processed, {} skipped): {:?} ({:.1}%)",
@@ -771,6 +761,11 @@ async fn main() {
                     timing_data.format_time,
                     (timing_data.format_time.as_nanos() as f64 / total_nanos * 100.0)
                 );
+                eprintln!(
+                    "        Total: {:?} ({:.1}%)",
+                    total_time,
+                    (total_time.as_nanos() as f64 / total_nanos * 100.0)
+                );
             }
 
             eprintln!(
@@ -783,7 +778,9 @@ async fn main() {
 
         // Save updated cache
         if let Err(e) = global_cache.lock().await.save() {
-            eprintln!("Warning: failed to save cache: {}", e);
+            if validate {
+                eprintln!("Warning: failed to save cache: {}", e);
+            }
         }
 
         Ok(())

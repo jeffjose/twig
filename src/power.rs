@@ -147,7 +147,6 @@ fn get_cache_path() -> Result<PathBuf, PowerError> {
 fn read_cache() -> Result<Option<BatteryInfo>, PowerError> {
     let cache_path = get_cache_path()?;
     if !cache_path.exists() {
-        eprintln!("Cache file does not exist at {:?}", cache_path);
         return Ok(None);
     }
 
@@ -167,26 +166,19 @@ fn write_cache(info: &BatteryInfo) -> Result<(), PowerError> {
 
     let cache_content = serde_json::to_string(info)?;
     fs::write(&cache_path, cache_content)?;
-    eprintln!("Successfully wrote cache to {:?}", cache_path);
     Ok(())
 }
 
 pub fn get_battery_info_internal() -> Result<BatteryInfo, PowerError> {
-    let manager_start = Instant::now();
     let manager = Manager::new()?;
-    let manager_time = manager_start.elapsed();
-
-    let battery_start = Instant::now();
     let battery = manager
         .batteries()?
         .next()
         .transpose()?
         .ok_or(PowerError::BatteryNotFound)?;
-    let battery_time = battery_start.elapsed();
 
     let mut info = BatteryInfo::default();
 
-    let info_start = Instant::now();
     // Basic information
     info.percentage = (battery.state_of_charge().value * 100.0) as i32;
     let state = battery.state();
@@ -238,12 +230,6 @@ pub fn get_battery_info_internal() -> Result<BatteryInfo, PowerError> {
 
     // Health/capacity percentage
     info.capacity = (battery.state_of_health().value * 100.0) as i32;
-    let info_time = info_start.elapsed();
-
-    eprintln!(
-        "Power timing: Manager init: {:?}, Battery access: {:?}, Info gathering: {:?}",
-        manager_time, battery_time, info_time
-    );
 
     Ok(info)
 }

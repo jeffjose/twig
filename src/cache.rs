@@ -97,14 +97,11 @@ impl GlobalCache {
     pub fn load() -> Result<Self, CacheError> {
         let cache_path = get_cache_path()?;
         if !cache_path.exists() {
-            eprintln!("Cache file does not exist at {:?}", cache_path);
             return Ok(Self::default());
         }
 
         let cache_content = fs::read_to_string(&cache_path)?;
-        let cache = serde_json::from_str(&cache_content)?;
-        eprintln!("Successfully read cache from {:?}", cache_path);
-        Ok(cache)
+        serde_json::from_str(&cache_content).map_err(Into::into)
     }
 
     pub fn save(&self) -> Result<(), CacheError> {
@@ -117,7 +114,6 @@ impl GlobalCache {
 
         let cache_content = serde_json::to_string(self)?;
         fs::write(&cache_path, cache_content)?;
-        eprintln!("Successfully wrote cache to {:?}", cache_path);
         Ok(())
     }
 
@@ -127,10 +123,7 @@ impl GlobalCache {
                 .age()
                 .ok()
                 .filter(|age| *age < Duration::from_secs(cache_duration))
-                .map(|age| {
-                    eprintln!("Using cached power data (age: {:?})", age);
-                    &entry.data
-                })
+                .map(|_| &entry.data)
         })
     }
 
@@ -144,10 +137,7 @@ impl GlobalCache {
                 .age()
                 .ok()
                 .filter(|age| *age < Duration::from_secs(cache_duration))
-                .map(|age| {
-                    eprintln!("Using cached hostname data (age: {:?})", age);
-                    &entry.data
-                })
+                .map(|_| &entry.data)
         })
     }
 
@@ -161,10 +151,7 @@ impl GlobalCache {
                 .age()
                 .ok()
                 .filter(|age| *age < Duration::from_secs(cache_duration))
-                .map(|age| {
-                    eprintln!("Using cached IP data (age: {:?})", age);
-                    &entry.data
-                })
+                .map(|_| &entry.data)
         })
     }
 
