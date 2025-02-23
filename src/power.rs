@@ -1,14 +1,18 @@
 use battery::{Manager, State};
+use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
-use std::io::{Error as IoError, ErrorKind};
-use std::time::Duration;
+use std::fs;
+use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Debug)]
 pub enum PowerError {
     BatteryError(battery::Error),
     BatteryNotFound,
+    IoError(std::io::Error),
+    JsonError(serde_json::Error),
 }
 
 impl fmt::Display for PowerError {
@@ -16,6 +20,8 @@ impl fmt::Display for PowerError {
         match self {
             PowerError::BatteryError(e) => write!(f, "Battery error: {}", e),
             PowerError::BatteryNotFound => write!(f, "No battery found"),
+            PowerError::IoError(e) => write!(f, "IO error: {}", e),
+            PowerError::JsonError(e) => write!(f, "JSON error: {}", e),
         }
     }
 }
@@ -28,13 +34,19 @@ impl From<battery::Error> for PowerError {
     }
 }
 
-#[derive(Deserialize, Serialize, Default)]
-pub struct Config {
-    pub name: Option<String>,
-    pub format: String,
+impl From<std::io::Error> for PowerError {
+    fn from(err: std::io::Error) -> Self {
+        PowerError::IoError(err)
+    }
 }
 
-#[derive(Debug)]
+impl From<serde_json::Error> for PowerError {
+    fn from(err: serde_json::Error) -> Self {
+        PowerError::JsonError(err)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatteryInfo {
     pub percentage: i32,
     pub status: String,
@@ -50,6 +62,32 @@ pub struct BatteryInfo {
     pub serial: String,
     pub cycle_count: i32,
     pub capacity: i32,
+    #[serde(with = "system_time_serde")]
+    pub cached_at: SystemTime,
+}
+
+// Serialization helper for SystemTime
+mod system_time_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    pub fn serialize<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let duration = time
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_secs(0));
+        duration.as_secs().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<SystemTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let secs = u64::deserialize(deserializer)?;
+        Ok(UNIX_EPOCH + Duration::from_secs(secs))
+    }
 }
 
 impl Default for BatteryInfo {
@@ -69,36 +107,86 @@ impl Default for BatteryInfo {
             serial: String::from("Unknown"),
             cycle_count: 0,
             capacity: 0,
+            cached_at: SystemTime::now(),
         }
     }
 }
 
-fn format_duration(duration: Duration) -> String {
-    let total_minutes = duration.as_secs() / 60;
-    let hours = total_minutes / 60;
-    let minutes = total_minutes % 60;
+#[derive(Deserialize, Serialize, Clone)]
+pub struct Config {
+    pub name: Option<String>,
+    pub format: String,
+    #[serde(default)]
+    pub cache_enabled: Option<bool>,
+    #[serde(default)]
+    pub cache_duration: Option<u64>,
+}
 
-    if hours > 0 {
-        if minutes > 0 {
-            format!("{}h {}m", hours, minutes)
-        } else {
-            format!("{}h", hours)
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            name: None,
+            format: String::new(),
+            cache_enabled: None,
+            cache_duration: None,
         }
-    } else {
-        format!("{}m", minutes)
     }
 }
 
-pub fn get_battery_info() -> Result<BatteryInfo, PowerError> {
+fn get_cache_path() -> Result<PathBuf, PowerError> {
+    BaseDirs::new()
+        .map(|base_dirs| {
+            base_dirs
+                .cache_dir()
+                .join("twig")
+                .join("battery_cache.json")
+        })
+        .ok_or_else(|| PowerError::BatteryNotFound)
+}
+
+fn read_cache() -> Result<Option<BatteryInfo>, PowerError> {
+    let cache_path = get_cache_path()?;
+    if !cache_path.exists() {
+        eprintln!("Cache file does not exist at {:?}", cache_path);
+        return Ok(None);
+    }
+
+    let cache_content = fs::read_to_string(&cache_path)?;
+    serde_json::from_str(&cache_content)
+        .map(Some)
+        .map_err(Into::into)
+}
+
+fn write_cache(info: &BatteryInfo) -> Result<(), PowerError> {
+    let cache_path = get_cache_path()?;
+
+    // Ensure cache directory exists
+    if let Some(parent) = cache_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let cache_content = serde_json::to_string(info)?;
+    fs::write(&cache_path, cache_content)?;
+    eprintln!("Successfully wrote cache to {:?}", cache_path);
+    Ok(())
+}
+
+pub fn get_battery_info_internal() -> Result<BatteryInfo, PowerError> {
+    let manager_start = Instant::now();
     let manager = Manager::new()?;
+    let manager_time = manager_start.elapsed();
+
+    let battery_start = Instant::now();
     let battery = manager
         .batteries()?
         .next()
         .transpose()?
         .ok_or(PowerError::BatteryNotFound)?;
+    let battery_time = battery_start.elapsed();
 
     let mut info = BatteryInfo::default();
 
+    let info_start = Instant::now();
     // Basic information
     info.percentage = (battery.state_of_charge().value * 100.0) as i32;
     let state = battery.state();
@@ -122,8 +210,8 @@ pub fn get_battery_info() -> Result<BatteryInfo, PowerError> {
     // Power information
     let power_rate = battery.energy_rate().value as f64;
     info.power_now = match state {
-        State::Charging => power_rate, // Show positive value for power input
-        State::Discharging => -power_rate, // Show negative value for power consumption
+        State::Charging => power_rate,
+        State::Discharging => -power_rate,
         _ => power_rate,
     };
     info.energy_now = battery.energy().value as f64;
@@ -146,12 +234,34 @@ pub fn get_battery_info() -> Result<BatteryInfo, PowerError> {
     // Manufacturer and model information
     info.manufacturer = battery.vendor().unwrap_or("Unknown").to_string();
     info.model = battery.model().unwrap_or("Unknown").to_string();
-    info.serial = "Unknown".to_string(); // Serial number not available in the battery crate
+    info.serial = "Unknown".to_string();
 
     // Health/capacity percentage
     info.capacity = (battery.state_of_health().value * 100.0) as i32;
+    let info_time = info_start.elapsed();
+
+    eprintln!(
+        "Power timing: Manager init: {:?}, Battery access: {:?}, Info gathering: {:?}",
+        manager_time, battery_time, info_time
+    );
 
     Ok(info)
+}
+
+fn format_duration(duration: Duration) -> String {
+    let total_minutes = duration.as_secs() / 60;
+    let hours = total_minutes / 60;
+    let minutes = total_minutes % 60;
+
+    if hours > 0 {
+        if minutes > 0 {
+            format!("{}h {}m", hours, minutes)
+        } else {
+            format!("{}h", hours)
+        }
+    } else {
+        format!("{}m", minutes)
+    }
 }
 
 #[cfg(test)]
@@ -210,19 +320,23 @@ mod tests {
         let config = Config {
             name: Some("test".to_string()),
             format: "{percentage}% ({power_now}W)".to_string(),
+            cache_enabled: Some(true),
+            cache_duration: Some(10),
         };
 
         // Test serialization
         let serialized = serde_json::to_string(&config).unwrap();
         assert_eq!(
             serialized,
-            r#"{"name":"test","format":"{percentage}% ({power_now}W)"}"#
+            r#"{"name":"test","format":"{percentage}% ({power_now}W)","cache_enabled":true,"cache_duration":10}"#
         );
 
         // Test deserialization
         let deserialized: Config = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.name, Some("test".to_string()));
         assert_eq!(deserialized.format, "{percentage}% ({power_now}W)");
+        assert_eq!(deserialized.cache_enabled, Some(true));
+        assert_eq!(deserialized.cache_duration, Some(10));
     }
 
     #[test]

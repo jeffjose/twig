@@ -9,8 +9,11 @@ use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use tokio;
+
+mod cache;
+use cache::GlobalCache;
 
 mod time;
 use time::{format_current_time, TimeConfig};
@@ -110,6 +113,8 @@ struct Config {
     cwd: Vec<CwdConfig>,
     #[serde(default)]
     power: Vec<PowerConfig>,
+    #[serde(default)]
+    cache: CacheConfig,
 }
 
 #[derive(Deserialize, Default)]
@@ -118,21 +123,35 @@ struct PromptConfig {
     format: String,
 }
 
+#[derive(Deserialize, Default)]
+struct CacheConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_cache_duration")]
+    duration: u64,
+}
+
 fn default_format() -> String {
     "{time}".to_string()
 }
 
+fn default_cache_duration() -> u64 {
+    30 // Default to 30 seconds
+}
+
 fn get_config_path(cli_config: &Option<PathBuf>) -> Result<PathBuf, ConfigError> {
-    if let Some(path) = cli_config {
+    let path = if let Some(path) = cli_config {
         if path.as_os_str().is_empty() {
             return Err(ConfigError::EmptyConfigPath);
         }
-        Ok(path.clone())
+        path.clone()
     } else {
         BaseDirs::new()
             .map(|base_dirs| base_dirs.config_dir().join("twig").join("config.toml"))
-            .ok_or(ConfigError::NoConfigDir)
-    }
+            .ok_or(ConfigError::NoConfigDir)?
+    };
+    eprintln!("Using config file: {:?}", path);
+    Ok(path)
 }
 
 fn validate_time_format(format: &str) -> Result<(), ConfigError> {
@@ -205,6 +224,12 @@ where
 fn load_config(config_path: &PathBuf) -> Result<Config, ConfigError> {
     let content = fs::read_to_string(config_path)?;
     let config: Config = toml::from_str(&content)?;
+
+    // Debug logging for cache settings
+    eprintln!(
+        "Loaded config - Cache settings: enabled={}, duration={}s",
+        config.cache.enabled, config.cache.duration
+    );
 
     // Validate that multiple sections have names
     validate_section_names(&config.time, "time")?;
@@ -304,6 +329,9 @@ struct TimingData {
     skip_count: usize,
 }
 
+// Add this at the top level
+type TaskResult = Result<(Vec<(String, String)>, TimingData), Box<dyn Error + Send + Sync>>;
+
 #[tokio::main]
 async fn main() {
     let start = Instant::now();
@@ -324,6 +352,11 @@ async fn main() {
         let config = load_config(&config_path)?;
         let config_duration = config_start.elapsed();
 
+        // Load global cache
+        let global_cache = Arc::new(tokio::sync::Mutex::new(
+            GlobalCache::load().unwrap_or_default(),
+        ));
+
         // Time the variable gathering
         let vars_start = Instant::now();
 
@@ -333,7 +366,7 @@ async fn main() {
         let prompt_format = config.prompt.format.clone();
 
         // Create parallel tasks for each config section
-        let mut tasks = Vec::new();
+        let mut tasks: Vec<tokio::task::JoinHandle<TaskResult>> = Vec::new();
         let mut task_names = Vec::new();
 
         // Handle time variables
@@ -371,7 +404,7 @@ async fn main() {
             }
             timing.format_time = format_start.elapsed();
 
-            (time_vars, timing)
+            Ok((time_vars, timing))
         }));
         task_names.push("Time variables");
 
@@ -414,8 +447,7 @@ async fn main() {
             }
             timing.format_time = format_start.elapsed();
 
-            // Return timing info along with vars
-            (hostname_vars, timing)
+            Ok((hostname_vars, timing))
         }));
         task_names.push("Hostname variables");
 
@@ -462,7 +494,7 @@ async fn main() {
             }
             timing.format_time = format_start.elapsed();
 
-            (ip_vars, timing)
+            Ok((ip_vars, timing))
         }));
         task_names.push("IP variables");
 
@@ -501,13 +533,14 @@ async fn main() {
             }
             timing.format_time = format_start.elapsed();
 
-            (cwd_vars, timing)
+            Ok((cwd_vars, timing))
         }));
         task_names.push("CWD variables");
 
         // Handle power variables
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
+        let global_cache_clone = Arc::clone(&global_cache);
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
@@ -516,45 +549,110 @@ async fn main() {
                 skip_count: 0,
             };
 
-            // Get battery info once
+            let mut power_vars = Vec::new();
             let fetch_start = Instant::now();
-            let battery_info = power::get_battery_info();
+
+            // Get battery info once with caching
+            let power_config = &config_clone.power[0];
+            let cache_enabled = power_config
+                .cache_enabled
+                .unwrap_or(config_clone.cache.enabled);
+            let cache_duration = power_config
+                .cache_duration
+                .unwrap_or(config_clone.cache.duration);
+
+            let mut global_cache = global_cache_clone.lock().await;
+            let battery_info: Result<power::BatteryInfo, power::PowerError> =
+                match global_cache.get_power(cache_duration) {
+                    Some(cached) => {
+                        eprintln!("Using cached battery info");
+                        Ok(cached.clone())
+                    }
+                    None => {
+                        eprintln!("Getting fresh battery info");
+                        let mut info = power::get_battery_info_internal()?;
+                        info.cached_at = SystemTime::now();
+                        global_cache.set_power(info.clone());
+                        if let Err(e) = global_cache.save() {
+                            eprintln!("Warning: failed to save cache: {}", e);
+                        }
+                        Ok(info)
+                    }
+                };
             timing.fetch_time = fetch_start.elapsed();
             timing.fetch_count = 1;
 
+            drop(global_cache); // Release the lock
+
             let format_start = Instant::now();
-            let mut power_vars = Vec::new();
+
+            // Pre-format common values once
+            let formatted_values = if let Ok(info) = &battery_info {
+                Some((
+                    info.percentage.to_string(),
+                    info.status.clone(),
+                    info.time_left.clone(),
+                    if info.power_now.abs() < 0.01 {
+                        "0.0".to_string()
+                    } else {
+                        format!("{:+.1}", info.power_now)
+                    },
+                    format!("{:.1}", info.energy_now),
+                    format!("{:.1}", info.energy_full),
+                    format!("{:.1}", info.voltage),
+                    format!("{:.1}", info.temperature),
+                    info.capacity.to_string(),
+                    info.cycle_count.to_string(),
+                    info.technology.clone(),
+                    info.manufacturer.clone(),
+                    info.model.clone(),
+                    info.serial.clone(),
+                ))
+            } else {
+                None
+            };
 
             for (i, power_config) in config_clone.power.iter().enumerate() {
                 let var_name = get_var_name(power_config, "power", i);
                 if format_uses_variable(&format_clone, &var_name) {
                     match &battery_info {
-                        Ok(info) => {
-                            // Format according to the config's format string
-                            let formatted = power_config
-                                .format
-                                .replace("{percentage}", &info.percentage.to_string())
-                                .replace("{status}", &info.status)
-                                .replace("{time_left}", &info.time_left)
-                                .replace(
-                                    "{power_now}",
-                                    &if info.power_now.abs() < 0.01 {
-                                        "0.0".to_string()
-                                    } else {
-                                        format!("{:+.1}", info.power_now)
-                                    },
-                                )
-                                .replace("{energy_now}", &format!("{:.1}", info.energy_now))
-                                .replace("{energy_full}", &format!("{:.1}", info.energy_full))
-                                .replace("{voltage}", &format!("{:.1}", info.voltage))
-                                .replace("{temperature}", &format!("{:.1}", info.temperature))
-                                .replace("{capacity}", &info.capacity.to_string())
-                                .replace("{cycle_count}", &info.cycle_count.to_string())
-                                .replace("{technology}", &info.technology)
-                                .replace("{manufacturer}", &info.manufacturer)
-                                .replace("{model}", &info.model)
-                                .replace("{serial}", &info.serial);
-                            power_vars.push((var_name, formatted));
+                        Ok(_) => {
+                            if let Some((
+                                percentage,
+                                status,
+                                time_left,
+                                power_now,
+                                energy_now,
+                                energy_full,
+                                voltage,
+                                temperature,
+                                capacity,
+                                cycle_count,
+                                technology,
+                                manufacturer,
+                                model,
+                                serial,
+                            )) = &formatted_values
+                            {
+                                // Use pre-formatted values
+                                let formatted = power_config
+                                    .format
+                                    .replace("{percentage}", percentage)
+                                    .replace("{status}", status)
+                                    .replace("{time_left}", time_left)
+                                    .replace("{power_now}", power_now)
+                                    .replace("{energy_now}", energy_now)
+                                    .replace("{energy_full}", energy_full)
+                                    .replace("{voltage}", voltage)
+                                    .replace("{temperature}", temperature)
+                                    .replace("{capacity}", capacity)
+                                    .replace("{cycle_count}", cycle_count)
+                                    .replace("{technology}", technology)
+                                    .replace("{manufacturer}", manufacturer)
+                                    .replace("{model}", model)
+                                    .replace("{serial}", serial);
+                                power_vars.push((var_name, formatted));
+                            }
                         }
                         Err(e) => {
                             if validate {
@@ -569,7 +667,7 @@ async fn main() {
             }
             timing.format_time = format_start.elapsed();
 
-            (power_vars, timing)
+            Ok((power_vars, timing))
         }));
         task_names.push("Power variables");
 
@@ -597,7 +695,7 @@ async fn main() {
             }
             timing.format_time = format_start.elapsed();
 
-            (env_vars, timing)
+            Ok((env_vars, timing))
         }));
         task_names.push("Environment variables");
 
@@ -608,13 +706,18 @@ async fn main() {
 
         for (result, task_name) in results.into_iter().zip(task_names.iter()) {
             match result {
-                Ok((mut vars, timing)) => {
+                Ok(Ok((mut vars, timing))) => {
                     variables.append(&mut vars);
                     task_timings.push((task_name, timing));
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     if validate {
                         eprintln!("Warning: task failed: {}", e);
+                    }
+                }
+                Err(e) => {
+                    if validate {
+                        eprintln!("Warning: task panicked: {}", e);
                     }
                 }
             }
@@ -676,6 +779,11 @@ async fn main() {
                 (template_start.elapsed().as_nanos() as f64 / total_nanos * 100.0)
             );
             eprintln!("  Total time: {:?}", total_duration);
+        }
+
+        // Save updated cache
+        if let Err(e) = global_cache.lock().await.save() {
+            eprintln!("Warning: failed to save cache: {}", e);
         }
 
         Ok(())
