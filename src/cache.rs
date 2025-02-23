@@ -1,6 +1,5 @@
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -131,6 +130,7 @@ impl GlobalCache {
         self.power = Some(CacheEntry::new(info));
     }
 
+    #[allow(dead_code)]
     pub fn get_hostname(&self, cache_duration: u64) -> Option<&String> {
         self.hostname.as_ref().and_then(|entry| {
             entry
@@ -141,10 +141,12 @@ impl GlobalCache {
         })
     }
 
+    #[allow(dead_code)]
     pub fn set_hostname(&mut self, hostname: String) {
         self.hostname = Some(CacheEntry::new(hostname));
     }
 
+    #[allow(dead_code)]
     pub fn get_ip(&self, cache_duration: u64) -> Option<&std::net::IpAddr> {
         self.ip.as_ref().and_then(|entry| {
             entry
@@ -155,6 +157,7 @@ impl GlobalCache {
         })
     }
 
+    #[allow(dead_code)]
     pub fn set_ip(&mut self, ip: std::net::IpAddr) {
         self.ip = Some(CacheEntry::new(ip));
     }

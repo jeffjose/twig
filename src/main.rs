@@ -153,6 +153,7 @@ fn get_config_path(cli_config: &Option<PathBuf>) -> Result<PathBuf, ConfigError>
     Ok(path)
 }
 
+#[allow(dead_code)]
 fn validate_time_format(format: &str) -> Result<(), ConfigError> {
     format_current_time(format)
         .map(|_| ())
@@ -535,16 +536,16 @@ async fn main() {
             // Get battery info once with caching
             if !config_clone.power.is_empty() {
                 let power_config = &config_clone.power[0];
-                let cache_enabled = power_config
+                let _cache_enabled = power_config
                     .cache_enabled
                     .unwrap_or(config_clone.cache.enabled);
-                let cache_duration = power_config
+                let _cache_duration = power_config
                     .cache_duration
                     .unwrap_or(config_clone.cache.duration);
 
                 let mut global_cache = global_cache_clone.lock().await;
                 let battery_info: Result<power::BatteryInfo, power::PowerError> =
-                    match global_cache.get_power(cache_duration) {
+                    match global_cache.get_power(_cache_duration) {
                         Some(cached) => Ok(cached.clone()),
                         None => {
                             let mut info = power::get_battery_info_internal()?;
@@ -563,7 +564,7 @@ async fn main() {
 
                 drop(global_cache); // Release the lock
 
-                let format_start = Instant::now();
+                let _format_start = Instant::now();
 
                 // Pre-format common values once
                 let formatted_values = if let Ok(info) = &battery_info {

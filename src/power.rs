@@ -5,7 +5,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 #[derive(Debug)]
 pub enum PowerError {
@@ -133,6 +133,7 @@ impl Default for Config {
     }
 }
 
+#[allow(dead_code)]
 fn get_cache_path() -> Result<PathBuf, PowerError> {
     BaseDirs::new()
         .map(|base_dirs| {
@@ -144,6 +145,7 @@ fn get_cache_path() -> Result<PathBuf, PowerError> {
         .ok_or_else(|| PowerError::BatteryNotFound)
 }
 
+#[allow(dead_code)]
 fn read_cache() -> Result<Option<BatteryInfo>, PowerError> {
     let cache_path = get_cache_path()?;
     if !cache_path.exists() {
@@ -156,6 +158,7 @@ fn read_cache() -> Result<Option<BatteryInfo>, PowerError> {
         .map_err(Into::into)
 }
 
+#[allow(dead_code)]
 fn write_cache(info: &BatteryInfo) -> Result<(), PowerError> {
     let cache_path = get_cache_path()?;
 
