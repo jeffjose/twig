@@ -8,6 +8,11 @@ format = "%H:%M:%S"
 name = "t"
 format = "(%H:%M:%S)"
 
+[[time]]
+# Basic time format (default if not specified)
+name = "tt"
+format = "(%H:%M:%S)"
+
 # Or you can use these alternative formats:
 # Full date and time with 12-hour clock
 # time_format = "%Y-%m-%d %I:%M:%S %p"  # Example: 2024-03-20 02:30:45 PM

@@ -304,6 +304,7 @@ struct TimingData {
     fetch_time: std::time::Duration,
     format_time: std::time::Duration,
     fetch_count: usize,
+    skip_count: usize,
 }
 
 #[tokio::main]
@@ -340,29 +341,35 @@ async fn main() {
 
         // Handle time variables
         let config_clone = Arc::clone(&config);
+        let format_clone = prompt_format.clone();
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
                 format_time: std::time::Duration::default(),
                 fetch_count: 0,
+                skip_count: 0,
             };
 
             let format_start = Instant::now();
             let mut time_vars = Vec::new();
             for (i, time_config) in config_clone.time.iter().enumerate() {
-                let fetch_start = Instant::now();
-                match format_current_time(&time_config.format) {
-                    Ok(time) => {
-                        timing.fetch_time += fetch_start.elapsed();
-                        timing.fetch_count += 1;
-                        let var_name = get_var_name(time_config, "time", i);
-                        time_vars.push((var_name, time));
-                    }
-                    Err(e) => {
-                        if validate {
-                            eprintln!("Warning: couldn't format time: {}", e);
+                let var_name = get_var_name(time_config, "time", i);
+                if format_uses_variable(&format_clone, &var_name) {
+                    let fetch_start = Instant::now();
+                    match format_current_time(&time_config.format) {
+                        Ok(time) => {
+                            timing.fetch_time += fetch_start.elapsed();
+                            timing.fetch_count += 1;
+                            time_vars.push((var_name, time));
+                        }
+                        Err(e) => {
+                            if validate {
+                                eprintln!("Warning: couldn't format time: {}", e);
+                            }
                         }
                     }
+                } else {
+                    timing.skip_count += 1;
                 }
             }
             timing.format_time = format_start.elapsed();
@@ -379,6 +386,7 @@ async fn main() {
                 fetch_time: std::time::Duration::default(),
                 format_time: std::time::Duration::default(),
                 fetch_count: 0,
+                skip_count: 0,
             };
 
             // Get hostname once - time the fetch
@@ -395,7 +403,6 @@ async fn main() {
                 if format_uses_variable(&format_clone, &var_name) {
                     match &hostname_data {
                         Ok(hostname) => {
-                            // Here we're just doing string operations, not expensive syscalls
                             hostname_vars.push((var_name, hostname.clone()));
                         }
                         Err(e) => {
@@ -404,6 +411,8 @@ async fn main() {
                             }
                         }
                     }
+                } else {
+                    timing.skip_count += 1;
                 }
             }
             timing.format_time = format_start.elapsed();
@@ -421,6 +430,7 @@ async fn main() {
                 fetch_time: std::time::Duration::default(),
                 format_time: std::time::Duration::default(),
                 fetch_count: 0,
+                skip_count: 0,
             };
 
             // Get IP data once - this is the expensive part
@@ -449,6 +459,8 @@ async fn main() {
                             }
                         }
                     }
+                } else {
+                    timing.skip_count += 1;
                 }
             }
             timing.format_time = format_start.elapsed();
@@ -465,6 +477,7 @@ async fn main() {
                 fetch_time: std::time::Duration::default(),
                 format_time: std::time::Duration::default(),
                 fetch_count: 0,
+                skip_count: 0,
             };
 
             let format_start = Instant::now();
@@ -485,6 +498,8 @@ async fn main() {
                             }
                         }
                     }
+                } else {
+                    timing.skip_count += 1;
                 }
             }
             timing.format_time = format_start.elapsed();
@@ -500,6 +515,7 @@ async fn main() {
                 fetch_time: std::time::Duration::default(),
                 format_time: std::time::Duration::default(),
                 fetch_count: 0,
+                skip_count: 0,
             };
 
             let format_start = Instant::now();
@@ -510,6 +526,8 @@ async fn main() {
                     timing.fetch_time += fetch_start.elapsed();
                     timing.fetch_count += 1;
                     env_vars.push((format!("${}", var_name), value));
+                } else {
+                    timing.skip_count += 1;
                 }
             }
             timing.format_time = format_start.elapsed();
@@ -574,8 +592,9 @@ async fn main() {
             for (name, timing_data) in task_timings {
                 eprintln!("      {}: ", name);
                 eprintln!(
-                    "        Data fetch ({} times): {:?} ({:.1}%)",
+                    "        Data fetch ({} processed, {} skipped): {:?} ({:.1}%)",
                     timing_data.fetch_count,
+                    timing_data.skip_count,
                     timing_data.fetch_time,
                     (timing_data.fetch_time.as_nanos() as f64 / total_nanos * 100.0)
                 );
