@@ -58,9 +58,6 @@ shorten = false
 [[power]]
 name = "bat"
 format = "{percentage}% ({power_now}W)"  # Shows percentage and power usage with sign
-# Override global cache settings for power section (optional)
-cache_enabled = true
-cache_duration = 10  # Cache for 10 seconds
 
 [prompt]
 # Available variables with optional formatting:
@@ -103,7 +100,7 @@ format = """
 # format = "{time} [{$PWD:blue}] {$SHELL:green}"
 # format = "{$LANG} - {$TERM} - {time}"
 
-[cache]
-enabled = true
-# Cache duration in seconds, defaults to 30 if not specified
-duration = 30
+[daemon]
+# How often the daemon updates data (in seconds)
+# Defaults to 1 second if not specified
+frequency = 1

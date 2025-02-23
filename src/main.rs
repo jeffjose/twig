@@ -129,7 +129,7 @@ struct PromptConfig {
     format: String,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 struct DaemonConfig {
     #[serde(
         default = "default_daemon_frequency",
@@ -138,16 +138,24 @@ struct DaemonConfig {
     frequency: u64,
 }
 
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            frequency: default_daemon_frequency(),
+        }
+    }
+}
+
 fn validate_daemon_frequency<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let value = u64::deserialize(deserializer)?;
-    Ok(if value == 0 {
-        default_daemon_frequency()
+    if value == 0 {
+        Ok(default_daemon_frequency())
     } else {
-        value
-    })
+        Ok(value)
+    }
 }
 
 fn default_format() -> String {
@@ -897,14 +905,40 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let config_path = temp_dir.path().join("config.toml");
 
-        // Test default frequency
+        // Test default frequency when section is missing
+        let config_content = r#"
+[[time]]
+format = "%H:%M:%S"
+"#;
+        fs::write(&config_path, config_content).unwrap();
+        let config = load_config(&config_path).unwrap();
+        assert_eq!(
+            config.daemon.frequency, 1,
+            "Should default to 1 second when section is missing"
+        );
+
+        // Test default frequency when section exists but frequency is missing
+        let config_content = r#"
+[daemon]
+"#;
+        fs::write(&config_path, config_content).unwrap();
+        let config = load_config(&config_path).unwrap();
+        assert_eq!(
+            config.daemon.frequency, 1,
+            "Should default to 1 second when frequency is missing"
+        );
+
+        // Test explicit frequency of 1
         let config_content = r#"
 [daemon]
 frequency = 1
 "#;
         fs::write(&config_path, config_content).unwrap();
         let config = load_config(&config_path).unwrap();
-        assert_eq!(config.daemon.frequency, 1); // Default is 1 second
+        assert_eq!(
+            config.daemon.frequency, 1,
+            "Should accept explicit frequency of 1"
+        );
 
         // Test custom frequency
         let config_content = r#"
@@ -913,7 +947,19 @@ frequency = 5
 "#;
         fs::write(&config_path, config_content).unwrap();
         let config = load_config(&config_path).unwrap();
-        assert_eq!(config.daemon.frequency, 5);
+        assert_eq!(config.daemon.frequency, 5, "Should accept custom frequency");
+
+        // Test invalid zero frequency
+        let config_content = r#"
+[daemon]
+frequency = 0
+"#;
+        fs::write(&config_path, config_content).unwrap();
+        let config = load_config(&config_path).unwrap();
+        assert_eq!(
+            config.daemon.frequency, 1,
+            "Should default to 1 second when frequency is 0"
+        );
     }
 
     #[tokio::test]
