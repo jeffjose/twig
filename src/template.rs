@@ -15,114 +15,130 @@ impl std::fmt::Display for TemplateError {
 
 impl Error for TemplateError {}
 
+struct FormatMode {
+    start_sequence: &'static str,
+    end_sequence: &'static str,
+    newline: &'static str,
+}
+
+// ANSI escape codes and formatting
+const ANSI_ESCAPE: &str = "\x1b[";
+const ANSI_RESET: &str = "\x1b[0m";
+
+// TCSH specific formatting
+const TCSH_ESCAPE_START: &str = "%{";
+const TCSH_ESCAPE_END: &str = "%}";
+const TCSH_MODE: &str = "tcsh";
+
+// Combined sequences
+const TCSH_START_SEQUENCE: &str = "%{\x1b[";
+const TCSH_END_SEQUENCE: &str = "%{\x1b[0m%}";
+const TCSH_SPACE_NEWLINE: &str = " \\n";
+const NORMAL_SPACE_NEWLINE: &str = " \n";
+
+// Color codes
+const COLOR_RED: &str = "31";
+const COLOR_GREEN: &str = "32";
+const COLOR_YELLOW: &str = "33";
+const COLOR_BLUE: &str = "34";
+const COLOR_MAGENTA: &str = "35";
+const COLOR_CYAN: &str = "36";
+const COLOR_WHITE: &str = "37";
+
+// Bright color codes (pre-combined with bold)
+const COLOR_BRIGHT_RED: &str = "1;31";
+const COLOR_BRIGHT_GREEN: &str = "1;32";
+const COLOR_BRIGHT_YELLOW: &str = "1;33";
+const COLOR_BRIGHT_BLUE: &str = "1;34";
+const COLOR_BRIGHT_MAGENTA: &str = "1;35";
+const COLOR_BRIGHT_CYAN: &str = "1;36";
+const COLOR_BRIGHT_WHITE: &str = "1;37";
+
+// Style codes
+const STYLE_BOLD: &str = "1";
+const STYLE_ITALIC: &str = "3";
+const STYLE_NORMAL: &str = "0";
+
+impl FormatMode {
+    fn new(mode: Option<&str>) -> Self {
+        match mode {
+            Some(TCSH_MODE) => FormatMode {
+                start_sequence: TCSH_START_SEQUENCE,
+                end_sequence: TCSH_END_SEQUENCE,
+                newline: TCSH_SPACE_NEWLINE,
+            },
+            _ => FormatMode {
+                start_sequence: ANSI_ESCAPE,
+                end_sequence: ANSI_RESET,
+                newline: NORMAL_SPACE_NEWLINE,
+            },
+        }
+    }
+
+    fn format_color(&self, code: &str, text: &str) -> String {
+        match self.start_sequence {
+            s if s.starts_with(TCSH_ESCAPE_START) => format!(
+                "{}{}{}m{}{}{}",
+                TCSH_ESCAPE_START, ANSI_ESCAPE, code, TCSH_ESCAPE_END, text, self.end_sequence
+            ),
+            _ => format!("{}{}m{}{}", ANSI_ESCAPE, code, text, ANSI_RESET),
+        }
+    }
+}
+
+fn get_format_code(fmt: &str) -> Option<&'static str> {
+    match fmt.trim() {
+        // Colors
+        "red" => Some(COLOR_RED),
+        "green" => Some(COLOR_GREEN),
+        "yellow" => Some(COLOR_YELLOW),
+        "blue" => Some(COLOR_BLUE),
+        "magenta" => Some(COLOR_MAGENTA),
+        "cyan" => Some(COLOR_CYAN),
+        "white" => Some(COLOR_WHITE),
+        // Bright colors
+        "bright_red" => Some(COLOR_BRIGHT_RED),
+        "bright_green" => Some(COLOR_BRIGHT_GREEN),
+        "bright_yellow" => Some(COLOR_BRIGHT_YELLOW),
+        "bright_blue" => Some(COLOR_BRIGHT_BLUE),
+        "bright_magenta" => Some(COLOR_BRIGHT_MAGENTA),
+        "bright_cyan" => Some(COLOR_BRIGHT_CYAN),
+        "bright_white" => Some(COLOR_BRIGHT_WHITE),
+        // Styles
+        "bold" => Some(STYLE_BOLD),
+        "italic" => Some(STYLE_ITALIC),
+        "normal" => Some(STYLE_NORMAL),
+        _ => Some(COLOR_WHITE), // Default to white for unknown colors
+    }
+}
+
 fn apply_format(
     text: &str,
     format_str: &str,
     show_warnings: bool,
-    mode: Option<&str>,
+    mode: &FormatMode,
 ) -> Result<String, TemplateError> {
     // Handle empty or whitespace-only format string
     if format_str.trim().is_empty() {
         return Ok(text.to_string());
     }
 
-    match mode {
-        Some("tcsh") => {
-            let formats: Vec<&str> = format_str.split(',').map(str::trim).collect();
-            let mut codes = Vec::new();
+    let formats: Vec<&str> = format_str.split(',').map(str::trim).collect();
+    let mut codes = Vec::new();
 
-            for fmt in formats {
-                let code = match fmt.trim() {
-                    // Colors
-                    "red" => "31",
-                    "green" => "32",
-                    "yellow" => "33",
-                    "blue" => "34",
-                    "magenta" => "35",
-                    "cyan" => "36",
-                    "white" => "37",
-                    "bright_red" => "1;31",
-                    "bright_green" => "1;32",
-                    "bright_yellow" => "1;33",
-                    "bright_blue" => "1;34",
-                    "bright_magenta" => "1;35",
-                    "bright_cyan" => "1;36",
-                    "bright_white" => "1;37",
-                    // Styles
-                    "bold" => "1",
-                    "italic" => "3",
-                    "normal" => "0",
-                    unknown => {
-                        if show_warnings {
-                            eprintln!("Warning: unknown format '{}', ignoring", unknown);
-                        }
-                        continue;
-                    }
-                };
-                codes.push(code);
-            }
-
-            if codes.is_empty() {
-                Ok(text.to_string())
-            } else {
-                let combined_codes = codes.join(";");
-                Ok(format!(
-                    "%{{\x1b[{}m%}}{}%{{\x1b[0m%}}",
-                    combined_codes, text
-                ))
-            }
+    for fmt in formats {
+        if let Some(code) = get_format_code(fmt) {
+            codes.push(code);
+        } else if show_warnings {
+            eprintln!("Warning: unknown format '{}', ignoring", fmt);
         }
-        None => {
-            let formats: Vec<&str> = format_str.split(',').map(str::trim).collect();
-            let mut codes = Vec::new();
+    }
 
-            for fmt in formats {
-                let code = match fmt.trim() {
-                    // Colors
-                    "red" => "31",
-                    "green" => "32",
-                    "yellow" => "33",
-                    "blue" => "34",
-                    "magenta" => "35",
-                    "cyan" => "36",
-                    "white" => "37",
-                    "bright_red" => "1;31",
-                    "bright_green" => "1;32",
-                    "bright_yellow" => "1;33",
-                    "bright_blue" => "1;34",
-                    "bright_magenta" => "1;35",
-                    "bright_cyan" => "1;36",
-                    "bright_white" => "1;37",
-                    // Styles
-                    "bold" => "1",
-                    "italic" => "3",
-                    "normal" => "0",
-                    unknown => {
-                        if show_warnings {
-                            eprintln!("Warning: unknown format '{}', ignoring", unknown);
-                        }
-                        "37" // Default to white for unknown colors
-                    }
-                };
-                codes.push(code);
-            }
-
-            if codes.is_empty() {
-                Ok(text.to_string())
-            } else {
-                let combined_codes = codes.join(";");
-                Ok(format!("\x1b[{}m{}\x1b[0m", combined_codes, text))
-            }
-        }
-        Some(unknown_mode) => {
-            if show_warnings {
-                eprintln!(
-                    "Warning: unknown mode '{}', using default formatting",
-                    unknown_mode
-                );
-            }
-            apply_format(text, format_str, show_warnings, None)
-        }
+    if codes.is_empty() {
+        Ok(text.to_string())
+    } else {
+        let combined_codes = codes.join(";");
+        Ok(mode.format_color(&combined_codes, text))
     }
 }
 
@@ -147,6 +163,7 @@ fn process_variables(
     mode: Option<&str>,
 ) -> Result<String, TemplateError> {
     let mut result = template.to_string();
+    let format_mode = FormatMode::new(mode);
 
     // Process colored variables first (including quoted text)
     for (name, value) in variables {
@@ -175,7 +192,7 @@ fn process_variables(
                     continue;
                 }
 
-                let formatted_value = apply_format(value, format_str, show_warnings, mode)?;
+                let formatted_value = apply_format(value, format_str, show_warnings, &format_mode)?;
                 result.replace_range(start..end + 1, &formatted_value);
                 position = start + formatted_value.len();
             }
@@ -222,7 +239,8 @@ fn process_variables(
                     if color.contains(' ') {
                         replacements.push((start..end + 1, unescaped.clone()));
                     } else {
-                        let formatted_text = apply_format(&unescaped, color, show_warnings, mode)?;
+                        let formatted_text =
+                            apply_format(&unescaped, color, show_warnings, &format_mode)?;
                         replacements.push((start..end + 1, formatted_text));
                     }
                     position = end + 1;
@@ -277,89 +295,66 @@ pub fn format_template(
     template: &str,
     variables: &[(&str, &str)],
     show_warnings: bool,
-    mode: Option<&str>,
+    mode_str: Option<&str>,
 ) -> Result<String, TemplateError> {
     // Validate variables first
     validate_variables(template, variables)?;
 
-    if mode == Some("tcsh") {
-        // Process variables
-        let result = process_variables(template, variables, show_warnings, mode)?;
+    let mode = FormatMode::new(mode_str);
+    let result = process_variables(template, variables, show_warnings, mode_str)?;
 
-        // Convert newlines to literal "\n" for tcsh mode
-        let mut final_result = String::new();
-        for ch in result.chars() {
-            if ch == '\n' {
-                final_result.push(' '); // Add space before newline
-                final_result.push_str("\\n");
-            } else {
-                final_result.push(ch);
-            }
-        }
+    let mut final_result = String::new();
+    let mut chars = result.chars().peekable();
 
-        // Add ending sequence if there are any active color attributes
-        // or if there are colored lines followed by non-colored lines
-        let last_reset = final_result.rfind("%{\x1b[0m%}");
-        let last_color = final_result.rfind("%{\x1b[");
-        let lines: Vec<&str> = final_result.split("\\n").collect();
-        let has_color_followed_by_plain = final_result.contains("%{\x1b[")
-            && lines
-                .last()
-                .map_or(false, |last_line| !last_line.contains("%{\x1b["));
-
-        if has_color_followed_by_plain
-            || (last_color.is_some() && last_reset.map_or(true, |pos| pos < last_color.unwrap()))
-        {
-            final_result.push_str("%{\x1b[0m%}");
-        }
-
-        Ok(final_result)
-    } else {
-        // For non-tcsh mode, process line by line
-        let lines: Vec<&str> = template.lines().collect();
-        let line_count = lines.len();
-
-        // Process each line
-        let mut result_lines = Vec::with_capacity(line_count);
-        for line in lines {
-            let processed = process_variables(line, variables, show_warnings, mode)?;
-            result_lines.push(processed);
-        }
-
-        let has_color = result_lines.iter().any(|line| line.contains("\x1b["));
-
-        let mut result = if has_color {
-            // For color templates, preserve all lines and add space before each newline
-            result_lines.join(" \n")
+    while let Some(ch) = chars.next() {
+        if ch == '\n' {
+            final_result.push_str(mode.newline);
         } else {
-            // For non-color templates, preserve all lines including empty ones
-            result_lines.join(" \n")
-        };
-
-        // Add ending sequence if there are any active color attributes
-        // or if there are colored lines followed by non-colored lines
-        let last_reset = result.rfind("\x1b[0m");
-        let last_color = result.rfind("\x1b[");
-        let has_color_followed_by_plain = result.contains("\x1b[")
-            && result
-                .lines()
-                .rev()
-                .next()
-                .map_or(false, |last_line| !last_line.contains("\x1b["));
-
-        if has_color_followed_by_plain
-            || (last_color.is_some() && last_reset.map_or(true, |pos| pos < last_color.unwrap()))
-        {
-            result.push_str("\x1b[0m");
+            final_result.push(ch);
         }
-
-        // Add trailing newline if original template had one
-        if template.ends_with('\n') {
-            result.push_str(" \n");
-        }
-
-        Ok(result)
     }
+
+    // Add ending sequence if needed
+    let needs_reset = match mode_str {
+        Some("tcsh") => {
+            let last_reset = final_result.rfind("%{\x1b[0m%}");
+            let last_color = final_result.rfind("%{\x1b[");
+            let lines: Vec<&str> = final_result.split("\\n").collect();
+            let has_color_followed_by_plain = final_result.contains("%{\x1b[")
+                && lines
+                    .last()
+                    .map_or(false, |last_line| !last_line.contains("%{\x1b["));
+
+            has_color_followed_by_plain
+                || (last_color.is_some()
+                    && last_reset.map_or(true, |pos| pos < last_color.unwrap()))
+        }
+        _ => {
+            let last_reset = final_result.rfind("\x1b[0m");
+            let last_color = final_result.rfind("\x1b[");
+            let has_color_followed_by_plain = final_result.contains("\x1b[")
+                && final_result
+                    .lines()
+                    .rev()
+                    .next()
+                    .map_or(false, |last_line| !last_line.contains("\x1b["));
+
+            has_color_followed_by_plain
+                || (last_color.is_some()
+                    && last_reset.map_or(true, |pos| pos < last_color.unwrap()))
+        }
+    };
+
+    if needs_reset {
+        final_result.push_str(mode.end_sequence);
+    }
+
+    // Add trailing newline if original template had one and we haven't already added it
+    if template.ends_with('\n') && !final_result.ends_with(mode.newline) {
+        final_result.push_str(mode.newline);
+    }
+
+    Ok(final_result)
 }
 
 #[cfg(test)]
