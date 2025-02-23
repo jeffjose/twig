@@ -2,6 +2,7 @@ use battery::{Manager, State};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
+use std::io::{Error as IoError, ErrorKind};
 use std::time::Duration;
 
 #[derive(Debug)]
@@ -156,26 +157,20 @@ pub fn get_battery_info() -> Result<BatteryInfo, PowerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_format_duration() {
-        use std::time::Duration;
-
-        // Test hours and minutes
-        let duration = Duration::from_secs(7200 + 1800); // 2h 30m
-        assert_eq!(format_duration(duration), "2h 30m");
-
-        // Test minutes only
-        let duration = Duration::from_secs(1800); // 30m
-        assert_eq!(format_duration(duration), "30m");
-
-        // Test hours only
-        let duration = Duration::from_secs(7200); // 2h
-        assert_eq!(format_duration(duration), "2h");
-
-        // Test zero duration
-        let duration = Duration::from_secs(0);
-        assert_eq!(format_duration(duration), "0m");
+        // Test various duration formats
+        assert_eq!(format_duration(Duration::from_secs(0)), "0m");
+        assert_eq!(format_duration(Duration::from_secs(30)), "0m");
+        assert_eq!(format_duration(Duration::from_secs(60)), "1m");
+        assert_eq!(format_duration(Duration::from_secs(90)), "1m");
+        assert_eq!(format_duration(Duration::from_secs(3600)), "1h");
+        assert_eq!(format_duration(Duration::from_secs(3660)), "1h 1m");
+        assert_eq!(format_duration(Duration::from_secs(7200)), "2h");
+        assert_eq!(format_duration(Duration::from_secs(7230)), "2h");
+        assert_eq!(format_duration(Duration::from_secs(7290)), "2h 1m");
     }
 
     #[test]
@@ -188,14 +183,17 @@ mod tests {
         assert_eq!(info.energy_now, 0.0);
         assert_eq!(info.energy_full, 0.0);
         assert_eq!(info.voltage, 0.0);
+        assert_eq!(info.temperature, 0.0);
+        assert_eq!(info.technology, "Unknown");
         assert_eq!(info.manufacturer, "Unknown");
         assert_eq!(info.model, "Unknown");
         assert_eq!(info.serial, "Unknown");
+        assert_eq!(info.cycle_count, 0);
+        assert_eq!(info.capacity, 0);
     }
 
     #[test]
     fn test_power_error_display() {
-        // Test BatteryNotFound display
         let err = PowerError::BatteryNotFound;
         assert_eq!(err.to_string(), "No battery found");
     }
@@ -209,20 +207,22 @@ mod tests {
 
     #[test]
     fn test_config_serialization() {
-        use serde_json;
-
-        // Test serialization
         let config = Config {
             name: Some("test".to_string()),
-            format: "{percentage}%".to_string(),
+            format: "{percentage}% ({power_now}W)".to_string(),
         };
+
+        // Test serialization
         let serialized = serde_json::to_string(&config).unwrap();
-        assert_eq!(serialized, r#"{"name":"test","format":"{percentage}%"}"#);
+        assert_eq!(
+            serialized,
+            r#"{"name":"test","format":"{percentage}% ({power_now}W)"}"#
+        );
 
         // Test deserialization
         let deserialized: Config = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.name, Some("test".to_string()));
-        assert_eq!(deserialized.format, "{percentage}%");
+        assert_eq!(deserialized.format, "{percentage}% ({power_now}W)");
     }
 
     #[test]
@@ -230,7 +230,7 @@ mod tests {
         let info = BatteryInfo::default();
         let debug_str = format!("{:?}", info);
 
-        // Verify debug output contains all fields
+        // Check all fields are present in debug output
         assert!(debug_str.contains("percentage: 0"));
         assert!(debug_str.contains("status: \"Unknown\""));
         assert!(debug_str.contains("time_left: \"Unknown\""));
@@ -249,9 +249,7 @@ mod tests {
 
     #[test]
     fn test_battery_state_conversion() {
-        use battery::State;
-
-        // Test state conversion using the same logic as in get_battery_info
+        // Helper function to convert state to string like in get_battery_info
         let convert_state = |state: State| -> String {
             match state {
                 State::Charging => "Charging",
@@ -264,6 +262,7 @@ mod tests {
             .to_string()
         };
 
+        // Test all known states
         assert_eq!(convert_state(State::Charging), "Charging");
         assert_eq!(convert_state(State::Discharging), "Discharging");
         assert_eq!(convert_state(State::Empty), "Empty");
@@ -273,14 +272,48 @@ mod tests {
 
     #[test]
     fn test_percentage_calculation() {
-        // Test percentage calculation helper
-        let calculate_percentage = |value: f32| (value * 100.0) as i32;
+        // Helper function to calculate percentage like in get_battery_info
+        let calculate_percentage = |value: f32| -> i32 { (value * 100.0) as i32 };
 
-        // Test various values
+        // Test various percentage calculations
         assert_eq!(calculate_percentage(0.0), 0);
         assert_eq!(calculate_percentage(0.5), 50);
         assert_eq!(calculate_percentage(1.0), 100);
-        assert_eq!(calculate_percentage(0.333), 33);
-        assert_eq!(calculate_percentage(0.666), 66);
+        assert_eq!(calculate_percentage(0.01), 1);
+        assert_eq!(calculate_percentage(0.99), 99);
+    }
+
+    #[test]
+    fn test_power_formatting() {
+        // Helper function to format power like in main.rs
+        let format_power = |value: f64| -> String {
+            if value.abs() < 0.01 {
+                "0.0".to_string()
+            } else {
+                format!("{:+.1}", value)
+            }
+        };
+
+        // Test power formatting with various values
+        assert_eq!(format_power(0.0), "0.0");
+        assert_eq!(format_power(0.001), "0.0");
+        assert_eq!(format_power(-0.009), "0.0");
+        assert_eq!(format_power(1.234), "+1.2");
+        assert_eq!(format_power(-5.678), "-5.7");
+        assert_eq!(format_power(10.0), "+10.0");
+    }
+
+    #[test]
+    fn test_error_impl() {
+        // Test that PowerError implements std::error::Error
+        let err = PowerError::BatteryNotFound;
+        let _err_ref: &dyn std::error::Error = &err;
+    }
+
+    #[test]
+    fn test_error_debug() {
+        // Test Debug implementation
+        let err = PowerError::BatteryNotFound;
+        assert_eq!(format!("{:?}", err), "BatteryNotFound");
     }
 }
