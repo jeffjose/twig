@@ -1,6 +1,8 @@
 use chrono::{format::ParseError, Local};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+use std::time::Instant;
 
 #[derive(Debug)]
 pub enum TimeError {
@@ -61,7 +63,6 @@ pub fn format_current_time(format: &str) -> Result<String, TimeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use regex::Regex;
 
     #[test]
     fn test_default_time_format() {
@@ -113,5 +114,92 @@ mod tests {
         let formatted = format_current_time("%H").unwrap();
         let system_hour = now.format("%H").to_string();
         assert_eq!(formatted, system_hour);
+    }
+
+    #[test]
+    fn test_format_current_time_empty() {
+        let result = format_current_time("");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "");
+    }
+
+    #[test]
+    fn test_format_current_time_complex() {
+        let format = "%Y-%m-%d %H:%M:%S.%3f %z %Z";
+        let result = format_current_time(format).unwrap();
+        // Try different possible formats:
+        // 1. "2024-03-21 15:30:45.123 +0000 UTC"
+        // 2. "2024-03-21 15:30:45.123 -0800 PST"
+        // 3. "2024-03-21 15:30:45.123 -0800" (no timezone name)
+        let patterns = [
+            r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{4} \w+$",
+            r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{4}$",
+            r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ [+-]\d{4}.*$",
+        ];
+
+        let matches = patterns
+            .iter()
+            .any(|pattern| Regex::new(pattern).unwrap().is_match(&result));
+
+        assert!(
+            matches,
+            "Time format '{}' did not match any expected pattern",
+            result
+        );
+    }
+
+    #[test]
+    fn test_format_current_time_unicode() {
+        let format = "年:%Y 月:%m 日:%d 時:%H 分:%M 秒:%S";
+        let result = format_current_time(format).unwrap();
+        let re = Regex::new(r"^年:\d{4} 月:\d{2} 日:\d{2} 時:\d{2} 分:\d{2} 秒:\d{2}$").unwrap();
+        assert!(re.is_match(&result));
+    }
+
+    #[test]
+    fn test_format_current_time_mixed_valid_invalid() {
+        let format = "%Y-%invalid-%d";
+        let result = format_current_time(format).unwrap();
+        assert_eq!(result, "%Y-%invalid-%d");
+    }
+
+    #[test]
+    fn test_format_current_time_performance() {
+        let formats = [
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%3f %z",
+            "%A, %B %d, %Y at %H:%M:%S",
+            "%Y年%m月%d日 %H時%M分%S秒",
+            "%d/%m/%y %I:%M %p",
+        ];
+
+        let iterations = 1000;
+        let start = Instant::now();
+
+        for &format in &formats {
+            for _ in 0..iterations {
+                let _ = format_current_time(format);
+            }
+        }
+
+        let duration = start.elapsed();
+        let avg_duration = duration.as_micros() as f64 / (formats.len() * iterations) as f64;
+
+        // Average time should be less than 50 microseconds per format
+        assert!(
+            avg_duration < 50.0,
+            "Time formatting is too slow: {} µs",
+            avg_duration
+        );
+    }
+
+    #[test]
+    fn test_format_current_time_all_specifiers() {
+        let format = "%Y-%m-%d %H:%M:%S.%f %A %B %Z %z %p %j %U %W %c %x %X";
+        let result = format_current_time(format).unwrap();
+        assert!(
+            !result.contains('%'),
+            "Some format specifiers were not replaced"
+        );
     }
 }

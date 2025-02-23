@@ -2,6 +2,7 @@ use local_ip_address::list_afinet_netifas;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::net::IpAddr;
+use std::time::Instant;
 
 #[derive(Debug)]
 pub enum IpConfigError {
@@ -136,6 +137,148 @@ mod tests {
             };
             let result = get_ip(&config);
             assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_ip_with_empty_interface() {
+        let config = Config {
+            name: None,
+            interface: Some("".to_string()),
+        };
+        let result = get_ip(&config);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            IpConfigError::InterfaceNotFound(iface) => {
+                assert_eq!(iface, "");
+            }
+            _ => panic!("Expected InterfaceNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_ip_with_unicode_interface() {
+        let config = Config {
+            name: None,
+            interface: Some("インターフェース".to_string()),
+        };
+        let result = get_ip(&config);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            IpConfigError::InterfaceNotFound(iface) => {
+                assert_eq!(iface, "インターフェース");
+            }
+            _ => panic!("Expected InterfaceNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_ip_with_special_chars_interface() {
+        let config = Config {
+            name: None,
+            interface: Some("eth0!@#$%^&*()".to_string()),
+        };
+        let result = get_ip(&config);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            IpConfigError::InterfaceNotFound(iface) => {
+                assert_eq!(iface, "eth0!@#$%^&*()");
+            }
+            _ => panic!("Expected InterfaceNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_ip_performance() {
+        let start = Instant::now();
+        let iterations = 1000;
+
+        // Test default IP lookup performance
+        let config = Config::default();
+        for _ in 0..iterations {
+            let _ = get_ip(&config);
+        }
+
+        let duration = start.elapsed();
+        let avg_duration = duration.as_micros() as f64 / iterations as f64;
+
+        // Average time should be less than 100 microseconds per lookup
+        assert!(
+            avg_duration < 100.0,
+            "IP lookup is too slow: {} µs",
+            avg_duration
+        );
+    }
+
+    #[test]
+    fn test_interface_listing_performance() {
+        let start = Instant::now();
+        let iterations = 100;
+
+        for _ in 0..iterations {
+            let interfaces = list_afinet_netifas().unwrap();
+            assert!(!interfaces.is_empty());
+        }
+
+        let duration = start.elapsed();
+        let avg_duration = duration.as_micros() as f64 / iterations as f64;
+
+        // Average time should be less than 2000 microseconds per listing
+        assert!(
+            avg_duration < 2000.0,
+            "Interface listing is too slow: {} µs",
+            avg_duration
+        );
+    }
+
+    #[test]
+    fn test_multiple_interface_lookup() {
+        let interfaces = list_afinet_netifas().unwrap();
+
+        // Test IP lookup for each available interface
+        for (interface_name, _expected_ip) in interfaces {
+            let config = Config {
+                name: None,
+                interface: Some(interface_name.clone()),
+            };
+            let result = get_ip(&config);
+            assert!(
+                result.is_ok(),
+                "Failed to get IP for interface {}",
+                interface_name
+            );
+
+            // The result might not exactly match the expected_ip due to IPv4/IPv6 variations
+            // Just verify it's a valid IP address
+            match result.unwrap() {
+                IpAddr::V4(_) => (),
+                IpAddr::V6(_) => (),
+            }
+        }
+    }
+
+    #[test]
+    fn test_interface_name_case_sensitivity() {
+        if let Ok(interfaces) = list_afinet_netifas() {
+            if let Some((interface_name, _)) = interfaces.into_iter().next() {
+                // Test with uppercase
+                let config = Config {
+                    name: None,
+                    interface: Some(interface_name.to_uppercase()),
+                };
+                let result = get_ip(&config);
+                assert!(result.is_err());
+
+                // Test with lowercase
+                let config = Config {
+                    name: None,
+                    interface: Some(interface_name.to_lowercase()),
+                };
+                let result = get_ip(&config);
+                if interface_name != interface_name.to_lowercase() {
+                    assert!(result.is_err());
+                }
+            }
         }
     }
 }
