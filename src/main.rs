@@ -10,11 +10,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 use tokio;
-
-mod cache;
-use cache::GlobalCache;
 
 mod time;
 use time::{format_current_time, TimeConfig};
@@ -123,7 +120,7 @@ struct Config {
     #[serde(default)]
     power: Vec<PowerConfig>,
     #[serde(default)]
-    cache: CacheConfig,
+    daemon: DaemonConfig,
 }
 
 #[derive(Deserialize, Default)]
@@ -133,16 +130,12 @@ struct PromptConfig {
 }
 
 #[derive(Deserialize, Default)]
-struct CacheConfig {
-    #[serde(default)]
-    enabled: bool,
-    #[serde(default = "default_cache_duration")]
-    duration: u64,
+struct DaemonConfig {
     #[serde(
         default = "default_daemon_frequency",
         deserialize_with = "validate_daemon_frequency"
     )]
-    daemon_frequency: u64,
+    frequency: u64,
 }
 
 fn validate_daemon_frequency<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -150,19 +143,15 @@ where
     D: serde::Deserializer<'de>,
 {
     let value = u64::deserialize(deserializer)?;
-    if value == 0 {
-        Ok(default_daemon_frequency())
+    Ok(if value == 0 {
+        default_daemon_frequency()
     } else {
-        Ok(value)
-    }
+        value
+    })
 }
 
 fn default_format() -> String {
     "{time}".to_string()
-}
-
-fn default_cache_duration() -> u64 {
-    30 // Default to 30 seconds
 }
 
 fn default_daemon_frequency() -> u64 {
@@ -204,10 +193,8 @@ format = "%H:%M:%S"
 [prompt]
 format = "{time}"
 
-[cache]
-enabled = true
-duration = 30
-daemon_frequency = 1  # How often the daemon updates data (in seconds)
+[daemon]
+frequency = 1  # How often the daemon updates data (in seconds)
 "#;
         fs::write(config_path, default_config)?;
     }
@@ -389,11 +376,6 @@ async fn main() {
         let config = load_config(&config_path)?;
         let config_duration = config_start.elapsed();
 
-        // Load global cache
-        let global_cache = Arc::new(tokio::sync::Mutex::new(
-            GlobalCache::load().unwrap_or_default(),
-        ));
-
         // Time the variable gathering
         let vars_start = Instant::now();
 
@@ -449,7 +431,6 @@ async fn main() {
         // Handle hostname variables
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
-        let global_cache_clone = Arc::clone(&global_cache);
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
@@ -461,25 +442,8 @@ async fn main() {
 
             // Get hostname once - time the fetch
             let fetch_start = Instant::now();
-            let mut global_cache = global_cache_clone.lock().await;
             let hostname_data: Result<String, hostname::HostnameError> =
-                match global_cache.get_hostname(config_clone.cache.duration) {
-                    Some(cached) => {
-                        timing.cached_count += 1;
-                        Ok(cached.clone())
-                    }
-                    None => {
-                        let hostname = hostname::get_hostname(&hostname::Config::default())?;
-                        global_cache.set_hostname(hostname.clone());
-                        if let Err(e) = global_cache.save() {
-                            if validate {
-                                eprintln!("Warning: failed to save cache: {}", e);
-                            }
-                        }
-                        Ok(hostname)
-                    }
-                };
-            drop(global_cache);
+                hostname::get_hostname(&hostname::Config::default());
             timing.fetch_time = fetch_start.elapsed();
             timing.fetch_count = 1;
 
@@ -512,7 +476,6 @@ async fn main() {
         // Handle IP variables
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
-        let global_cache_clone = Arc::clone(&global_cache);
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
@@ -524,30 +487,11 @@ async fn main() {
 
             // Get IP data once - this is the expensive part
             let fetch_start = Instant::now();
-            let mut global_cache = global_cache_clone.lock().await;
-            let ip_data = match global_cache.get_ip(config_clone.cache.duration) {
-                Some(cached) => {
-                    timing.cached_count += 1;
-                    Ok(*cached)
-                }
-                None => {
-                    let ip = match &config_clone.ip.iter().find(|c| c.interface.is_some()) {
-                        Some(config) => ip::get_ip(config),
-                        None => local_ip_address::local_ip()
-                            .map_err(|e| ip::IpConfigError::Lookup(e.to_string())),
-                    };
-                    if let Ok(ip) = ip {
-                        global_cache.set_ip(ip);
-                        if let Err(e) = global_cache.save() {
-                            if validate {
-                                eprintln!("Warning: failed to save cache: {}", e);
-                            }
-                        }
-                    }
-                    ip
-                }
+            let ip_data = match &config_clone.ip.iter().find(|c| c.interface.is_some()) {
+                Some(config) => ip::get_ip(config),
+                None => local_ip_address::local_ip()
+                    .map_err(|e| ip::IpConfigError::Lookup(e.to_string())),
             };
-            drop(global_cache);
             timing.fetch_time = fetch_start.elapsed();
             timing.fetch_count = 1;
 
@@ -620,7 +564,6 @@ async fn main() {
         // Handle power variables
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
-        let global_cache_clone = Arc::clone(&global_cache);
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
@@ -633,119 +576,51 @@ async fn main() {
             let mut power_vars = Vec::new();
             let fetch_start = Instant::now();
 
-            // Get battery info once with caching
+            // Get battery info once
             if !config_clone.power.is_empty() {
-                let power_config = &config_clone.power[0];
-                let _cache_enabled = power_config
-                    .cache_enabled
-                    .unwrap_or(config_clone.cache.enabled);
-                let _cache_duration = power_config
-                    .cache_duration
-                    .unwrap_or(config_clone.cache.duration);
-
-                let mut global_cache = global_cache_clone.lock().await;
-                let battery_info: Result<power::BatteryInfo, power::PowerError> =
-                    match global_cache.get_power(_cache_duration) {
-                        Some(cached) => {
-                            timing.cached_count += 1;
-                            Ok(cached.clone())
-                        }
-                        None => {
-                            let mut info = power::get_battery_info_internal()?;
-                            info.cached_at = SystemTime::now();
-                            global_cache.set_power(info.clone());
-                            if let Err(e) = global_cache.save() {
-                                if validate {
-                                    eprintln!("Warning: failed to save cache: {}", e);
-                                }
-                            }
-                            Ok(info)
-                        }
-                    };
+                let _power_config = &config_clone.power[0];
+                let battery_info = power::get_battery_info_internal();
                 timing.fetch_time = fetch_start.elapsed();
                 timing.fetch_count = 1;
-
-                drop(global_cache); // Release the lock
 
                 let _format_start = Instant::now();
 
                 // Pre-format common values once
-                let formatted_values = if let Ok(info) = &battery_info {
-                    Some((
-                        info.percentage.to_string(),
-                        info.status.clone(),
-                        info.time_left.clone(),
-                        if info.power_now.abs() < 0.01 {
-                            "0.0".to_string()
+                if let Ok(info) = &battery_info {
+                    for (i, power_config) in config_clone.power.iter().enumerate() {
+                        let var_name = get_var_name(power_config, "power", i);
+                        if format_uses_variable(&format_clone, &var_name) {
+                            let formatted = power_config
+                                .format
+                                .replace("{percentage}", &info.percentage.to_string())
+                                .replace("{status}", &info.status)
+                                .replace("{time_left}", &info.time_left)
+                                .replace(
+                                    "{power_now}",
+                                    &if info.power_now.abs() < 0.01 {
+                                        "0.0".to_string()
+                                    } else {
+                                        format!("{:+.1}", info.power_now)
+                                    },
+                                )
+                                .replace("{energy_now}", &format!("{:.1}", info.energy_now))
+                                .replace("{energy_full}", &format!("{:.1}", info.energy_full))
+                                .replace("{voltage}", &format!("{:.1}", info.voltage))
+                                .replace("{temperature}", &format!("{:.1}", info.temperature))
+                                .replace("{capacity}", &info.capacity.to_string())
+                                .replace("{cycle_count}", &info.cycle_count.to_string())
+                                .replace("{technology}", &info.technology)
+                                .replace("{manufacturer}", &info.manufacturer)
+                                .replace("{model}", &info.model)
+                                .replace("{serial}", &info.serial);
+                            power_vars.push((var_name, formatted));
                         } else {
-                            format!("{:+.1}", info.power_now)
-                        },
-                        format!("{:.1}", info.energy_now),
-                        format!("{:.1}", info.energy_full),
-                        format!("{:.1}", info.voltage),
-                        format!("{:.1}", info.temperature),
-                        info.capacity.to_string(),
-                        info.cycle_count.to_string(),
-                        info.technology.clone(),
-                        info.manufacturer.clone(),
-                        info.model.clone(),
-                        info.serial.clone(),
-                    ))
-                } else {
-                    None
-                };
-
-                for (i, power_config) in config_clone.power.iter().enumerate() {
-                    let var_name = get_var_name(power_config, "power", i);
-                    if format_uses_variable(&format_clone, &var_name) {
-                        match &battery_info {
-                            Ok(_) => {
-                                if let Some((
-                                    percentage,
-                                    status,
-                                    time_left,
-                                    power_now,
-                                    energy_now,
-                                    energy_full,
-                                    voltage,
-                                    temperature,
-                                    capacity,
-                                    cycle_count,
-                                    technology,
-                                    manufacturer,
-                                    model,
-                                    serial,
-                                )) = &formatted_values
-                                {
-                                    // Use pre-formatted values
-                                    let formatted = power_config
-                                        .format
-                                        .replace("{percentage}", percentage)
-                                        .replace("{status}", status)
-                                        .replace("{time_left}", time_left)
-                                        .replace("{power_now}", power_now)
-                                        .replace("{energy_now}", energy_now)
-                                        .replace("{energy_full}", energy_full)
-                                        .replace("{voltage}", voltage)
-                                        .replace("{temperature}", temperature)
-                                        .replace("{capacity}", capacity)
-                                        .replace("{cycle_count}", cycle_count)
-                                        .replace("{technology}", technology)
-                                        .replace("{manufacturer}", manufacturer)
-                                        .replace("{model}", model)
-                                        .replace("{serial}", serial);
-                                    power_vars.push((var_name, formatted));
-                                }
-                            }
-                            Err(e) => {
-                                if validate {
-                                    eprintln!("Warning: couldn't get battery info: {}", e);
-                                }
-                                power_vars.push((var_name, String::from("N/A")));
-                            }
+                            timing.skip_count += 1;
                         }
-                    } else {
-                        timing.skip_count += 1;
+                    }
+                } else if let Err(e) = &battery_info {
+                    if validate {
+                        eprintln!("Warning: couldn't get battery info: {}", e);
                     }
                 }
             }
@@ -882,13 +757,6 @@ async fn main() {
             eprintln!("  Total time: {:?}", total_duration);
         }
 
-        // Save updated cache
-        if let Err(e) = global_cache.lock().await.save() {
-            if validate {
-                eprintln!("Warning: failed to save cache: {}", e);
-            }
-        }
-
         Ok(())
     })()
     .await;
@@ -927,7 +795,6 @@ async fn run_daemon(cli: &Cli) {
     };
 
     let config = Arc::new(config);
-    let global_cache = Arc::new(tokio::sync::Mutex::new(GlobalCache::default()));
 
     // Ensure data.json parent directory exists
     if let Some(parent) = config_path.parent() {
@@ -939,7 +806,7 @@ async fn run_daemon(cli: &Cli) {
 
     println!(
         "Daemon will update data every {} seconds",
-        config.cache.daemon_frequency
+        config.daemon.frequency
     );
 
     // Create a channel for shutdown signal
@@ -957,41 +824,21 @@ async fn run_daemon(cli: &Cli) {
     // Main daemon loop with proper shutdown handling
     loop {
         let config = Arc::clone(&config);
-        let global_cache = Arc::clone(&global_cache);
 
         tokio::select! {
-            _ = tokio::time::sleep(tokio::time::Duration::from_secs(config.cache.daemon_frequency)) => {
-                // Collect all data
-                let mut cache = global_cache.lock().await;
-
-                // Update hostname
-                if let Ok(hostname) = hostname::get_hostname(&hostname::Config::default()) {
-                    cache.set_hostname(hostname);
-                }
-
-                // Update IP
-                if let Ok(ip) = local_ip_address::local_ip() {
-                    cache.set_ip(ip);
-                }
-
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(config.daemon.frequency)) => {
                 // Update power info
-                if let Ok(mut info) = power::get_battery_info_internal() {
-                    info.cached_at = SystemTime::now();
-                    cache.set_power(info);
+                if let Ok(info) = power::get_battery_info_internal() {
+                    // Save to data.json
+                    let data_path = config_path.parent().unwrap().join("data.json");
+                    let data = serde_json::json!({
+                        "updated_at": info.updated_at,
+                        "power": info
+                    });
+                    if let Err(e) = fs::write(&data_path, serde_json::to_string_pretty(&data).unwrap()) {
+                        eprintln!("Failed to save data: {}", e);
+                    }
                 }
-
-                // Save to both cache.json and data.json
-                if let Err(e) = cache.save() {
-                    eprintln!("Failed to save cache: {}", e);
-                }
-
-                // Save to data.json as well
-                let data_path = config_path.parent().unwrap().join("data.json");
-                if let Err(e) = fs::write(&data_path, serde_json::to_string_pretty(&*cache).unwrap()) {
-                    eprintln!("Failed to save data: {}", e);
-                }
-
-                drop(cache);
             }
             _ = shutdown_rx.recv() => {
                 println!("Shutting down daemon...");
@@ -1004,67 +851,7 @@ async fn run_daemon(cli: &Cli) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use tempfile::tempdir;
-
-    #[tokio::test]
-    async fn test_daemon_data_file() {
-        let temp_dir = tempdir().unwrap();
-        let config_path = temp_dir.path().join("config.toml");
-        let data_path = temp_dir.path().join("data.json");
-
-        // Create a minimal config file with custom daemon frequency
-        let config_content = r#"
-[cache]
-enabled = true
-duration = 30
-daemon_frequency = 2  # Update every 2 seconds
-"#;
-        fs::write(&config_path, config_content).unwrap();
-
-        // Create CLI args for daemon mode
-        let args = Cli {
-            timing: false,
-            config: Some(config_path.clone()),
-            mode: None,
-            validate: false,
-            colors: false,
-            daemon: true,
-            fg: true,
-        };
-
-        // Create shutdown channel
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
-        let shutdown_tx_clone = shutdown_tx.clone();
-
-        // Run daemon in a separate task
-        let handle = tokio::spawn(async move {
-            tokio::select! {
-                _ = run_daemon(&args) => {},
-                _ = shutdown_rx.recv() => {}
-            }
-        });
-
-        // Wait a bit for the daemon to run
-        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
-        // Send shutdown signal
-        shutdown_tx_clone.send(()).await.unwrap();
-
-        // Wait for daemon to stop
-        handle.await.unwrap();
-
-        // Check that data.json was created
-        assert!(data_path.exists());
-
-        // Verify data.json contains expected fields
-        let data_content = fs::read_to_string(data_path).unwrap();
-        let data: serde_json::Value = serde_json::from_str(&data_content).unwrap();
-
-        assert!(data.get("hostname").is_some());
-        assert!(data.get("ip").is_some());
-        assert!(data.get("power").is_some());
-    }
 
     #[test]
     fn test_cli_flags() {
@@ -1112,24 +899,77 @@ daemon_frequency = 2  # Update every 2 seconds
 
         // Test default frequency
         let config_content = r#"
-[cache]
-enabled = true
-duration = 30
+[daemon]
+frequency = 1
 "#;
         fs::write(&config_path, config_content).unwrap();
         let config = load_config(&config_path).unwrap();
-        assert_eq!(config.cache.daemon_frequency, 1); // Default is 1 second
+        assert_eq!(config.daemon.frequency, 1); // Default is 1 second
 
         // Test custom frequency
         let config_content = r#"
-[cache]
-enabled = true
-duration = 30
-daemon_frequency = 5
+[daemon]
+frequency = 5
 "#;
         fs::write(&config_path, config_content).unwrap();
         let config = load_config(&config_path).unwrap();
-        assert_eq!(config.cache.daemon_frequency, 5);
+        assert_eq!(config.daemon.frequency, 5);
+    }
+
+    #[tokio::test]
+    async fn test_daemon_data_file() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let data_path = temp_dir.path().join("data.json");
+
+        // Create a minimal config file with custom daemon frequency
+        let config_content = r#"
+[daemon]
+frequency = 2  # Update every 2 seconds
+"#;
+        fs::write(&config_path, config_content).unwrap();
+
+        // Create CLI args for daemon mode
+        let args = Cli {
+            timing: false,
+            config: Some(config_path.clone()),
+            mode: None,
+            validate: false,
+            colors: false,
+            daemon: true,
+            fg: true,
+        };
+
+        // Create shutdown channel
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let shutdown_tx_clone = shutdown_tx.clone();
+
+        // Run daemon in a separate task
+        let handle = tokio::spawn(async move {
+            tokio::select! {
+                _ = run_daemon(&args) => {},
+                _ = shutdown_rx.recv() => {}
+            }
+        });
+
+        // Wait a bit for the daemon to run
+        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+        // Send shutdown signal
+        shutdown_tx_clone.send(()).await.unwrap();
+
+        // Wait for daemon to stop
+        handle.await.unwrap();
+
+        // Check that data.json was created
+        assert!(data_path.exists());
+
+        // Verify data.json contains expected fields
+        let data_content = fs::read_to_string(data_path).unwrap();
+        let data: serde_json::Value = serde_json::from_str(&data_content).unwrap();
+
+        assert!(data.get("updated_at").is_some());
+        assert!(data.get("power").is_some());
     }
 
     #[tokio::test]
@@ -1140,10 +980,8 @@ daemon_frequency = 5
 
         // Create config with very short update frequency
         let config_content = r#"
-[cache]
-enabled = true
-duration = 30
-daemon_frequency = 1
+[daemon]
+frequency = 1
 "#;
         fs::write(&config_path, config_content).unwrap();
 
@@ -1205,10 +1043,8 @@ daemon_frequency = 1
 
         // Create config with 2 second update frequency
         let config_content = r#"
-[cache]
-enabled = true
-duration = 30
-daemon_frequency = 2
+[daemon]
+frequency = 2
 "#;
         fs::write(&config_path, config_content).unwrap();
 
@@ -1276,15 +1112,13 @@ daemon_frequency = 2
 
         // Test with invalid daemon_frequency
         let config_content = r#"
-[cache]
-enabled = true
-duration = 30
-daemon_frequency = 0  # Invalid: should be > 0
+[daemon]
+frequency = 0  # Invalid: should be > 0
 "#;
         fs::write(&config_path, config_content).unwrap();
         let config = load_config(&config_path).unwrap();
 
         // Should fall back to default frequency
-        assert_eq!(config.cache.daemon_frequency, 1);
+        assert_eq!(config.daemon.frequency, 1);
     }
 }
