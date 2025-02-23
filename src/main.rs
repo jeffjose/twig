@@ -308,6 +308,7 @@ struct TimingData {
     format_time: std::time::Duration,
     fetch_count: usize,
     skip_count: usize,
+    cached_count: usize,
 }
 
 // Add this at the top level
@@ -359,6 +360,7 @@ async fn main() {
                 format_time: std::time::Duration::default(),
                 fetch_count: 0,
                 skip_count: 0,
+                cached_count: 0,
             };
 
             let format_start = Instant::now();
@@ -392,17 +394,37 @@ async fn main() {
         // Handle hostname variables
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
+        let global_cache_clone = Arc::clone(&global_cache);
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
                 format_time: std::time::Duration::default(),
                 fetch_count: 0,
                 skip_count: 0,
+                cached_count: 0,
             };
 
             // Get hostname once - time the fetch
             let fetch_start = Instant::now();
-            let hostname_data = hostname::get_hostname(&hostname::Config::default());
+            let mut global_cache = global_cache_clone.lock().await;
+            let hostname_data: Result<String, hostname::HostnameError> =
+                match global_cache.get_hostname(config_clone.cache.duration) {
+                    Some(cached) => {
+                        timing.cached_count += 1;
+                        Ok(cached.clone())
+                    }
+                    None => {
+                        let hostname = hostname::get_hostname(&hostname::Config::default())?;
+                        global_cache.set_hostname(hostname.clone());
+                        if let Err(e) = global_cache.save() {
+                            if validate {
+                                eprintln!("Warning: failed to save cache: {}", e);
+                            }
+                        }
+                        Ok(hostname)
+                    }
+                };
+            drop(global_cache);
             timing.fetch_time = fetch_start.elapsed();
             timing.fetch_count = 1;
 
@@ -435,21 +457,42 @@ async fn main() {
         // Handle IP variables
         let config_clone = Arc::clone(&config);
         let format_clone = prompt_format.clone();
+        let global_cache_clone = Arc::clone(&global_cache);
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
                 format_time: std::time::Duration::default(),
                 fetch_count: 0,
                 skip_count: 0,
+                cached_count: 0,
             };
 
             // Get IP data once - this is the expensive part
             let fetch_start = Instant::now();
-            let ip_data = match &config_clone.ip.iter().find(|c| c.interface.is_some()) {
-                Some(config) => ip::get_ip(config), // Use first interface config if any
-                None => local_ip_address::local_ip()
-                    .map_err(|e| ip::IpConfigError::Lookup(e.to_string())),
+            let mut global_cache = global_cache_clone.lock().await;
+            let ip_data = match global_cache.get_ip(config_clone.cache.duration) {
+                Some(cached) => {
+                    timing.cached_count += 1;
+                    Ok(*cached)
+                }
+                None => {
+                    let ip = match &config_clone.ip.iter().find(|c| c.interface.is_some()) {
+                        Some(config) => ip::get_ip(config),
+                        None => local_ip_address::local_ip()
+                            .map_err(|e| ip::IpConfigError::Lookup(e.to_string())),
+                    };
+                    if let Ok(ip) = ip {
+                        global_cache.set_ip(ip);
+                        if let Err(e) = global_cache.save() {
+                            if validate {
+                                eprintln!("Warning: failed to save cache: {}", e);
+                            }
+                        }
+                    }
+                    ip
+                }
             };
+            drop(global_cache);
             timing.fetch_time = fetch_start.elapsed();
             timing.fetch_count = 1;
 
@@ -488,6 +531,7 @@ async fn main() {
                 format_time: std::time::Duration::default(),
                 fetch_count: 0,
                 skip_count: 0,
+                cached_count: 0,
             };
 
             let format_start = Instant::now();
@@ -528,6 +572,7 @@ async fn main() {
                 format_time: std::time::Duration::default(),
                 fetch_count: 0,
                 skip_count: 0,
+                cached_count: 0,
             };
 
             let mut power_vars = Vec::new();
@@ -546,7 +591,10 @@ async fn main() {
                 let mut global_cache = global_cache_clone.lock().await;
                 let battery_info: Result<power::BatteryInfo, power::PowerError> =
                     match global_cache.get_power(_cache_duration) {
-                        Some(cached) => Ok(cached.clone()),
+                        Some(cached) => {
+                            timing.cached_count += 1;
+                            Ok(cached.clone())
+                        }
                         None => {
                             let mut info = power::get_battery_info_internal()?;
                             info.cached_at = SystemTime::now();
@@ -660,6 +708,7 @@ async fn main() {
                 format_time: std::time::Duration::default(),
                 fetch_count: 0,
                 skip_count: 0,
+                cached_count: 0,
             };
 
             let format_start = Instant::now();
@@ -751,8 +800,9 @@ async fn main() {
                 let total_time = timing_data.fetch_time + timing_data.format_time;
                 eprintln!("      {}: ", name);
                 eprintln!(
-                    "        Data fetch ({} processed, {} skipped): {:?} ({:.1}%)",
-                    timing_data.fetch_count,
+                    "        Data fetch ({} processed, {} cached, {} skipped): {:?} ({:.1}%)",
+                    timing_data.fetch_count - timing_data.cached_count,
+                    timing_data.cached_count,
                     timing_data.skip_count,
                     timing_data.fetch_time,
                     (timing_data.fetch_time.as_nanos() as f64 / total_nanos * 100.0)
