@@ -290,6 +290,7 @@ pub fn format_template(
         let mut final_result = String::new();
         for ch in result.chars() {
             if ch == '\n' {
+                final_result.push(' '); // Add space before newline
                 final_result.push_str("\\n");
             } else {
                 final_result.push(ch);
@@ -328,15 +329,11 @@ pub fn format_template(
         let has_color = result_lines.iter().any(|line| line.contains("\x1b["));
 
         let mut result = if has_color {
-            // For color templates, preserve all lines
-            result_lines.join("\n")
+            // For color templates, preserve all lines and add space before each newline
+            result_lines.join(" \n")
         } else {
-            // For non-color templates, filter out empty lines
-            result_lines
-                .into_iter()
-                .filter(|line| !line.trim().is_empty())
-                .collect::<Vec<_>>()
-                .join("\n")
+            // For non-color templates, preserve all lines including empty ones
+            result_lines.join(" \n")
         };
 
         // Add ending sequence if there are any active color attributes
@@ -354,6 +351,11 @@ pub fn format_template(
             || (last_color.is_some() && last_reset.map_or(true, |pos| pos < last_color.unwrap()))
         {
             result.push_str("\x1b[0m");
+        }
+
+        // Add trailing newline if original template had one
+        if template.ends_with('\n') {
+            result.push_str(" \n");
         }
 
         Ok(result)
@@ -415,39 +417,39 @@ mod tests {
 
     #[rstest]
     // Basic multiline
-    #[case::basic_two_lines("line1\nline2", "line1\nline2", vec![], None)]
-    #[case::var_in_both_lines("hello {name}\nbye {name}", "hello world\nbye world", vec![("name", "world")], None)]
-    #[case::filter_empty_middle("line1\n\nline2", "line1\nline2", vec![], None)]
+    #[case::basic_two_lines("line1\nline2", "line1 \nline2", vec![], None)]
+    #[case::var_in_both_lines("hello {name}\nbye {name}", "hello world \nbye world", vec![("name", "world")], None)]
+    #[case::filter_empty_middle("line1\n\nline2", "line1 \n \nline2", vec![], None)]
     // tcsh mode
-    #[case::tcsh_basic("line1\nline2", "line1\\nline2", vec![], Some("tcsh"))]
-    #[case::tcsh_with_env_vars("{$USER}\n{$HOST}", "testuser\\ntesthost", vec![("$USER", "testuser"), ("$HOST", "testhost")], Some("tcsh"))]
-    #[case::preserve_indent("line1\n  line2\n    line3", "line1\n  line2\n    line3", vec![], None)]
+    #[case::tcsh_basic("line1\nline2", "line1 \\nline2", vec![], Some("tcsh"))]
+    #[case::tcsh_with_env_vars("{$USER}\n{$HOST}", "testuser \\ntesthost", vec![("$USER", "testuser"), ("$HOST", "testhost")], Some("tcsh"))]
+    #[case::preserve_indent("line1\n  line2\n    line3", "line1 \n  line2 \n    line3", vec![], None)]
     // Empty lines
-    #[case::all_empty("\n\n\n", "", vec![], None)]
-    #[case::all_whitespace("  \n  \n  ", "", vec![], None)]
-    #[case::multiple_empty_lines("start\n\n\nend", "start\nend", vec![], None)]
+    #[case::all_empty("\n\n\n", " \n \n \n", vec![], None)]
+    #[case::all_whitespace("  \n  \n  ", "   \n   \n  ", vec![], None)]
+    #[case::multiple_empty_lines("start\n\n\nend", "start \n \n \nend", vec![], None)]
     // Indentation
-    #[case::increasing_spaces("  a\n    b\n      c", "  a\n    b\n      c", vec![], None)]
-    #[case::increasing_tabs("\ta\n\t\tb\n\t\t\tc", "\ta\n\t\tb\n\t\t\tc", vec![], None)]
+    #[case::increasing_spaces("  a\n    b\n      c", "  a \n    b \n      c", vec![], None)]
+    #[case::increasing_tabs("\ta\n\t\tb\n\t\t\tc", "\ta \n\t\tb \n\t\t\tc", vec![], None)]
     // Variables at different positions
-    #[case::var_at_line_start("{var}\n{var}", "value\nvalue", vec![("var", "value")], None)]
-    #[case::var_mixed_position("start {var}\n{var} end", "start value\nvalue end", vec![("var", "value")], None)]
+    #[case::var_at_line_start("{var}\n{var}", "value \nvalue", vec![("var", "value")], None)]
+    #[case::var_mixed_position("start {var}\n{var} end", "start value \nvalue end", vec![("var", "value")], None)]
     // Mixed content
-    #[case::three_sections("Title\n---\nContent", "Title\n---\nContent", vec![], None)]
-    #[case::markdown_headers("# {title}\n## {subtitle}", "# Header\n## Subheader", vec![("title", "Header"), ("subtitle", "Subheader")], None)]
+    #[case::three_sections("Title\n---\nContent", "Title \n--- \nContent", vec![], None)]
+    #[case::markdown_headers("# {title}\n## {subtitle}", "# Header \n## Subheader", vec![("title", "Header"), ("subtitle", "Subheader")], None)]
     // tcsh mode variations
-    #[case::tcsh_three_lines("a\nb\nc", "a\\nb\\nc", vec![], Some("tcsh"))]
-    #[case::tcsh_repeated_var("{var}\n{var}", "value\\nvalue", vec![("var", "value")], Some("tcsh"))]
-    #[case::tcsh_preserve_spaces("  spaces  \n  matter  ", "  spaces  \\n  matter  ", vec![], Some("tcsh"))]
+    #[case::tcsh_three_lines("a\nb\nc", "a \\nb \\nc", vec![], Some("tcsh"))]
+    #[case::tcsh_repeated_var("{var}\n{var}", "value \\nvalue", vec![("var", "value")], Some("tcsh"))]
+    #[case::tcsh_preserve_spaces("  spaces  \n  matter  ", "  spaces   \\n  matter  ", vec![], Some("tcsh"))]
     // Complex cases
-    #[case::quoted_arrows("{\">\"}\n{var}\n{\"<\"}", ">\nvalue\n<", vec![("var", "value")], None)]
-    #[case::numbered_lines("Line 1 {a}\nLine 2 {b}\nLine 3 {c}", "Line 1 1\nLine 2 2\nLine 3 3", vec![("a", "1"), ("b", "2"), ("c", "3")], None)]
-    #[case::markdown_doc("# {title}\n\n## {subtitle}\n\n{content}", "# Header\n## Subheader\nText", vec![("title", "Header"), ("subtitle", "Subheader"), ("content", "Text")], None)]
+    #[case::quoted_arrows("{\">\"}\n{var}\n{\"<\"}", "> \nvalue \n<", vec![("var", "value")], None)]
+    #[case::numbered_lines("Line 1 {a}\nLine 2 {b}\nLine 3 {c}", "Line 1 1 \nLine 2 2 \nLine 3 3", vec![("a", "1"), ("b", "2"), ("c", "3")], None)]
+    #[case::markdown_doc("# {title}\n\n## {subtitle}\n\n{content}", "# Header \n \n## Subheader \n \nText", vec![("title", "Header"), ("subtitle", "Subheader"), ("content", "Text")], None)]
     // Edge cases
-    #[case::single_newline("\n", "", vec![], None)]
-    #[case::trailing_newline("a\n", "a", vec![], None)]
-    #[case::leading_newline("\na", "a", vec![], None)]
-    #[case::multiple_empty_groups("a\n\nb\n\nc", "a\nb\nc", vec![], None)]
+    #[case::single_newline("\n", " \n", vec![], None)]
+    #[case::trailing_newline("a\n", "a \n", vec![], None)]
+    #[case::leading_newline("\na", " \na", vec![], None)]
+    #[case::multiple_empty_groups("a\n\nb\n\nc", "a \n \nb \n \nc", vec![], None)]
     fn test_noncolor_multiline(
         #[case] template: &str,
         #[case] expected: &str,
@@ -528,162 +530,174 @@ mod tests {
 
     #[rstest]
     // Basic multi-line colors
-    #[case::multiline_red("line1\n{var:red}", "line1\n\u{1b}[31mvalue\u{1b}[0m", vec![("var", "value")], None)]
-    #[case::multiline_green_blue("line1\n{var1:green}\nline2\n{var2:blue}", "line1\n\u{1b}[32mvalue1\u{1b}[0m\nline2\n\u{1b}[34mvalue2\u{1b}[0m", vec![("var1", "value1"), ("var2", "value2")], None)]
+    #[case::multiline_red("line1\n{var:red}", "line1 \n\u{1b}[31mvalue\u{1b}[0m", vec![("var", "value")], None)]
+    #[case::multiline_green_blue("line1\n{var1:green}\nline2\n{var2:blue}", "line1 \n\u{1b}[32mvalue1\u{1b}[0m \nline2 \n\u{1b}[34mvalue2\u{1b}[0m", vec![("var1", "value1"), ("var2", "value2")], None)]
     #[case::multiline_all_colors(
         "{var1:red}\n{var2:green}\n{var3:blue}\n{var4:yellow}\n{var5:magenta}\n{var6:cyan}\n{var7:white}",
-        "\u{1b}[31mvalue\u{1b}[0m\n\u{1b}[32mvalue\u{1b}[0m\n\u{1b}[34mvalue\u{1b}[0m\n\u{1b}[33mvalue\u{1b}[0m\n\u{1b}[35mvalue\u{1b}[0m\n\u{1b}[36mvalue\u{1b}[0m\n\u{1b}[37mvalue\u{1b}[0m",
+        "\u{1b}[31mvalue\u{1b}[0m \n\u{1b}[32mvalue\u{1b}[0m \n\u{1b}[34mvalue\u{1b}[0m \n\u{1b}[33mvalue\u{1b}[0m \n\u{1b}[35mvalue\u{1b}[0m \n\u{1b}[36mvalue\u{1b}[0m \n\u{1b}[37mvalue\u{1b}[0m",
         vec![("var1", "value"), ("var2", "value"), ("var3", "value"), ("var4", "value"), ("var5", "value"), ("var6", "value"), ("var7", "value")],
         None
     )]
     // Mixed styles and colors
     #[case::multiline_bold_colors(
         "{var1:bold,red}\n{var2:bold,green}\n{var3:bold,blue}",
-        "\u{1b}[1;31mvalue\u{1b}[0m\n\u{1b}[1;32mvalue\u{1b}[0m\n\u{1b}[1;34mvalue\u{1b}[0m",
+        "\u{1b}[1;31mvalue\u{1b}[0m \n\u{1b}[1;32mvalue\u{1b}[0m \n\u{1b}[1;34mvalue\u{1b}[0m",
         vec![("var1", "value"), ("var2", "value"), ("var3", "value")],
         None
     )]
     #[case::multiline_italic_colors(
         "{var1:italic,red}\n{var2:italic,green}\n{var3:italic,blue}",
-        "\u{1b}[3;31mvalue\u{1b}[0m\n\u{1b}[3;32mvalue\u{1b}[0m\n\u{1b}[3;34mvalue\u{1b}[0m",
+        "\u{1b}[3;31mvalue\u{1b}[0m \n\u{1b}[3;32mvalue\u{1b}[0m \n\u{1b}[3;34mvalue\u{1b}[0m",
         vec![("var1", "value"), ("var2", "value"), ("var3", "value")],
         None
     )]
     // Bright colors
     #[case::multiline_bright_colors(
         "{var1:bright_red}\n{var2:bright_green}\n{var3:bright_blue}",
-        "\u{1b}[1;31mvalue\u{1b}[0m\n\u{1b}[1;32mvalue\u{1b}[0m\n\u{1b}[1;34mvalue\u{1b}[0m",
+        "\u{1b}[1;31mvalue\u{1b}[0m \n\u{1b}[1;32mvalue\u{1b}[0m \n\u{1b}[1;34mvalue\u{1b}[0m",
         vec![("var1", "value"), ("var2", "value"), ("var3", "value")],
         None
     )]
     // Mixed with plain text
     #[case::multiline_mixed_plain(
         "plain1\n{var1:red}\nplain2\n{var2:blue}\nplain3",
-        "plain1\n\u{1b}[31mvalue\u{1b}[0m\nplain2\n\u{1b}[34mvalue\u{1b}[0m\nplain3\u{1b}[0m",
+        "plain1 \n\u{1b}[31mvalue\u{1b}[0m \nplain2 \n\u{1b}[34mvalue\u{1b}[0m \nplain3\u{1b}[0m",
         vec![("var1", "value"), ("var2", "value")],
         None
     )]
     // With indentation
     #[case::multiline_indented(
         "  {var1:red}\n    {var2:blue}\n      {var3:green}",
-        "  \u{1b}[31mvalue\u{1b}[0m\n    \u{1b}[34mvalue\u{1b}[0m\n      \u{1b}[32mvalue\u{1b}[0m",
+        "  \u{1b}[31mvalue\u{1b}[0m \n    \u{1b}[34mvalue\u{1b}[0m \n      \u{1b}[32mvalue\u{1b}[0m",
         vec![("var1", "value"), ("var2", "value"), ("var3", "value")],
         None
     )]
     // With quoted text
     #[case::multiline_quoted(
         "{\"text1\":red}\n{\"text2\":blue}\n{\"text3\":green}",
-        "\u{1b}[31mtext1\u{1b}[0m\n\u{1b}[34mtext2\u{1b}[0m\n\u{1b}[32mtext3\u{1b}[0m",
+        "\u{1b}[31mtext1\u{1b}[0m \n\u{1b}[34mtext2\u{1b}[0m \n\u{1b}[32mtext3\u{1b}[0m",
         vec![],
         None
     )]
     // Mixed variables and quoted text
     #[case::multiline_mixed_quoted(
         "{var1:red}\n{\"text\":blue}\n{var2:green}",
-        "\u{1b}[31mvalue1\u{1b}[0m\n\u{1b}[34mtext\u{1b}[0m\n\u{1b}[32mvalue2\u{1b}[0m",
+        "\u{1b}[31mvalue1\u{1b}[0m \n\u{1b}[34mtext\u{1b}[0m \n\u{1b}[32mvalue2\u{1b}[0m",
         vec![("var1", "value1"), ("var2", "value2")],
         None
     )]
     // With empty lines
     #[case::multiline_empty_lines(
         "{var1:red}\n\n{var2:blue}\n\n{var3:green}",
-        "\u{1b}[31mvalue\u{1b}[0m\n\n\u{1b}[34mvalue\u{1b}[0m\n\n\u{1b}[32mvalue\u{1b}[0m",
+        "\u{1b}[31mvalue\u{1b}[0m \n \n\u{1b}[34mvalue\u{1b}[0m \n \n\u{1b}[32mvalue\u{1b}[0m",
         vec![("var1", "value"), ("var2", "value"), ("var3", "value")],
         None
     )]
     // With multiple variables per line
     #[case::multiline_multiple_per_line(
         "{var1:red} and {var2:blue}\n{var3:green} and {var4:yellow}",
-        "\u{1b}[31mvalue\u{1b}[0m and \u{1b}[34mvalue\u{1b}[0m\n\u{1b}[32mvalue\u{1b}[0m and \u{1b}[33mvalue\u{1b}[0m",
+        "\u{1b}[31mvalue\u{1b}[0m and \u{1b}[34mvalue\u{1b}[0m \n\u{1b}[32mvalue\u{1b}[0m and \u{1b}[33mvalue\u{1b}[0m",
         vec![("var1", "value"), ("var2", "value"), ("var3", "value"), ("var4", "value")],
         None
     )]
     // With nested braces (should be ignored)
     #[case::multiline_nested_braces(
         "{{var1:red}}\n{{var2:blue}}\n{{var3:green}}",
-        "{value}\n{value}\n{value}",
+        "{value} \n{value} \n{value}",
         vec![("var1", "value"), ("var2", "value"), ("var3", "value")],
         None
     )]
     // With spaces in format (should be ignored)
     #[case::multiline_spaced_format(
         "{var1: red }\n{var2: blue }\n{var3: green }",
-        "value\nvalue\nvalue",
+        "value \nvalue \nvalue",
         vec![("var1", "value"), ("var2", "value"), ("var3", "value")],
         None
     )]
     // With unknown colors (should default to white)
     #[case::multiline_unknown_colors(
         "{var1:unknown1}\n{var2:unknown2}\n{var3:unknown3}",
-        "\u{1b}[37mvalue\u{1b}[0m\n\u{1b}[37mvalue\u{1b}[0m\n\u{1b}[37mvalue\u{1b}[0m",
+        "\u{1b}[37mvalue\u{1b}[0m \n\u{1b}[37mvalue\u{1b}[0m \n\u{1b}[37mvalue\u{1b}[0m",
         vec![("var1", "value"), ("var2", "value"), ("var3", "value")],
         None
     )]
     // With tcsh mode
     #[case::multiline_tcsh_mode(
         "{var1:red}\n{var2:blue}",
-        "%{\x1b[31m%}value%{\x1b[0m%}\\n%{\x1b[34m%}value%{\x1b[0m%}",
+        "%{\x1b[31m%}value%{\x1b[0m%} \\n%{\x1b[34m%}value%{\x1b[0m%}",
         vec![("var1", "value"), ("var2", "value")],
         Some("tcsh")
     )]
     // With Unicode characters
     #[case::multiline_unicode(
         "{\"→\":red}\n{\"←\":blue}\n{\"↔\":green}",
-        "\u{1b}[31m→\u{1b}[0m\n\u{1b}[34m←\u{1b}[0m\n\u{1b}[32m↔\u{1b}[0m",
+        "\u{1b}[31m→\u{1b}[0m \n\u{1b}[34m←\u{1b}[0m \n\u{1b}[32m↔\u{1b}[0m",
         vec![],
         None
     )]
     // With escaped quotes
     #[case::multiline_escaped_quotes(
         "{\"\\\"text1\\\"\":red}\n{\"\\\"text2\\\"\":blue}",
-        "\u{1b}[31m\"text1\"\u{1b}[0m\n\u{1b}[34m\"text2\"\u{1b}[0m",
+        "\u{1b}[31m\"text1\"\u{1b}[0m \n\u{1b}[34m\"text2\"\u{1b}[0m",
         vec![],
         None
     )]
     // Complex mixed case
     #[case::multiline_complex_mixed(
         "Title: {var1:bold,red}\nSubtitle: {\"→\":blue}\nContent: {var2:italic,green}",
-        "Title: \u{1b}[1;31mvalue1\u{1b}[0m\nSubtitle: \u{1b}[34m→\u{1b}[0m\nContent: \u{1b}[3;32mvalue2\u{1b}[0m",
+        "Title: \u{1b}[1;31mvalue1\u{1b}[0m \nSubtitle: \u{1b}[34m→\u{1b}[0m \nContent: \u{1b}[3;32mvalue2\u{1b}[0m",
         vec![("var1", "value1"), ("var2", "value2")],
         None
     )]
     // With multiple styles
     #[case::multiline_multiple_styles(
         "{var1:bold,italic,red}\n{var2:bold,italic,blue}",
-        "\u{1b}[1;3;31mvalue\u{1b}[0m\n\u{1b}[1;3;34mvalue\u{1b}[0m",
+        "\u{1b}[1;3;31mvalue\u{1b}[0m \n\u{1b}[1;3;34mvalue\u{1b}[0m",
         vec![("var1", "value"), ("var2", "value")],
         None
     )]
     // Tests for multiline ending sequence behavior
     #[case::multiline_color_then_plain(
         "{var:red}\nplain text",
-        "\u{1b}[31mvalue\u{1b}[0m\nplain text\u{1b}[0m",
+        "\u{1b}[31mvalue\u{1b}[0m \nplain text\u{1b}[0m",
         vec![("var", "value")],
         None
     )]
     #[case::multiline_mixed_ending(
         "{var1:red}\nplain\n{var2:blue}\nmore plain",
-        "\u{1b}[31mvalue1\u{1b}[0m\nplain\n\u{1b}[34mvalue2\u{1b}[0m\nmore plain\u{1b}[0m",
+        "\u{1b}[31mvalue1\u{1b}[0m \nplain \n\u{1b}[34mvalue2\u{1b}[0m \nmore plain\u{1b}[0m",
         vec![("var1", "value1"), ("var2", "value2")],
         None
     )]
     #[case::multiline_style_color_mix(
         "{var1:bold}\n{var2:red}\n{var3:italic,blue}",
-        "\u{1b}[1mvalue1\u{1b}[0m\n\u{1b}[31mvalue2\u{1b}[0m\n\u{1b}[3;34mvalue3\u{1b}[0m",
+        "\u{1b}[1mvalue1\u{1b}[0m \n\u{1b}[31mvalue2\u{1b}[0m \n\u{1b}[3;34mvalue3\u{1b}[0m",
         vec![("var1", "value1"), ("var2", "value2"), ("var3", "value3")],
         None
     )]
     #[case::multiline_mixed_colors_with_hash(
         "{var1:red} {var2:blue} {var3:green}\n#",
-        "\u{1b}[31mvalue1\u{1b}[0m \u{1b}[34mvalue2\u{1b}[0m \u{1b}[32mvalue3\u{1b}[0m\n#\u{1b}[0m",
+        "\u{1b}[31mvalue1\u{1b}[0m \u{1b}[34mvalue2\u{1b}[0m \u{1b}[32mvalue3\u{1b}[0m \n#\u{1b}[0m",
         vec![("var1", "value1"), ("var2", "value2"), ("var3", "value3")],
         None
     )]
     #[case::multiline_mixed_colors_with_hash_space(
         "{var1:red} {var2:blue} {var3:green}\n# ",
-        "\u{1b}[31mvalue1\u{1b}[0m \u{1b}[34mvalue2\u{1b}[0m \u{1b}[32mvalue3\u{1b}[0m\n# \u{1b}[0m",
+        "\u{1b}[31mvalue1\u{1b}[0m \u{1b}[34mvalue2\u{1b}[0m \u{1b}[32mvalue3\u{1b}[0m \n# \u{1b}[0m",
         vec![("var1", "value1"), ("var2", "value2"), ("var3", "value3")],
         None
+    )]
+    #[case::multiline_simple_arrow_with_plain(
+        "{\">\":red}\nfoo",
+        "\u{1b}[31m>\u{1b}[0m \nfoo\u{1b}[0m",
+        vec![],
+        None
+    )]
+    #[case::multiline_simple_arrow_with_plain_tcsh(
+        "{\">\":red}\nfoo",
+        "%{\x1b[31m%}>%{\x1b[0m%} \\nfoo%{\x1b[0m%}",
+        vec![],
+        Some("tcsh")
     )]
     fn test_multiline_color_substitution(
         #[case] template: &str,
