@@ -100,7 +100,8 @@ pub fn get_battery_info() -> Result<BatteryInfo, PowerError> {
 
     // Basic information
     info.percentage = (battery.state_of_charge().value * 100.0) as i32;
-    info.status = match battery.state() {
+    let state = battery.state();
+    info.status = match state {
         State::Charging => "Charging",
         State::Discharging => "Discharging",
         State::Empty => "Empty",
@@ -118,7 +119,12 @@ pub fn get_battery_info() -> Result<BatteryInfo, PowerError> {
     }
 
     // Power information
-    info.power_now = battery.energy_rate().value as f64;
+    let power_rate = battery.energy_rate().value as f64;
+    info.power_now = match state {
+        State::Charging => power_rate, // Show positive value for power input
+        State::Discharging => -power_rate, // Show negative value for power consumption
+        _ => power_rate,
+    };
     info.energy_now = battery.energy().value as f64;
     info.energy_full = battery.energy_full().value as f64;
     info.voltage = battery.voltage().value as f64;

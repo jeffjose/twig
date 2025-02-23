@@ -536,7 +536,7 @@ async fn main() {
                                 .replace("{percentage}", &info.percentage.to_string())
                                 .replace("{status}", &info.status)
                                 .replace("{time_left}", &info.time_left)
-                                .replace("{power_now}", &format!("{:.1}", info.power_now))
+                                .replace("{power_now}", &format!("{:+.1}", info.power_now))
                                 .replace("{energy_now}", &format!("{:.1}", info.energy_now))
                                 .replace("{energy_full}", &format!("{:.1}", info.energy_full))
                                 .replace("{voltage}", &format!("{:.1}", info.voltage))

@@ -31,82 +31,33 @@ name = "dir"
 shorten = false
 
 # Battery/Power configurations
+#
+# Available variables for power formats:
+# {percentage}     - Battery percentage (0-100)
+# {status}        - Battery state (Charging/Discharging/Full/Empty/Unknown)
+# {time_left}     - Time until charged/discharged (e.g. "2h 30m")
+# {power_now}     - Current power (W) with sign (positive when charging, negative when discharging)
+# {energy_now}    - Current energy level (Wh)
+# {energy_full}   - Maximum energy capacity (Wh)
+# {voltage}       - Battery voltage (V)
+# {temperature}   - Battery temperature (°C)
+# {capacity}      - Battery health percentage (0-100)
+# {cycle_count}   - Number of charge cycles
+# {technology}    - Battery technology (e.g. "Li-ion")
+# {manufacturer}  - Battery manufacturer
+# {model}         - Battery model
+# {serial}        - Battery serial number
+#
+# Example formats:
+# "{percentage}% {status}"                    - "85% Charging"
+# "{percentage}% {status} ({time_left})"      - "85% Charging (1:30)"
+# "{status} {percentage}% {power_now}W"       - "Charging 85% +45.2W"
+# "{voltage}V {power_now}W"                   - "12.1V +45.2W"
+# "{capacity}% health, {cycle_count} cycles"  - "94% health, 234 cycles"
+
 [[power]]
 name = "bat"
-format = "{percentage}"  # Raw percentage number
-
-[[power]]
-name = "bat_pct"
-format = "{percentage}%"  # Percentage with % symbol
-
-[[power]]
-name = "bat_status"
-format = "{status}"  # Charging/Discharging/Full/Not charging/Unknown
-
-[[power]]
-name = "bat_time"
-format = "{time_left}"  # Time remaining or time until full
-
-[[power]]
-name = "bat_power"
-format = "{power_now}W"  # Current power consumption
-
-[[power]]
-name = "bat_energy"
-format = "{energy_now}/{energy_full}Wh"  # Current and full energy
-
-[[power]]
-name = "bat_voltage"
-format = "{voltage}V"  # Battery voltage
-
-[[power]]
-name = "bat_temp"
-format = "{temperature}°C"  # Battery temperature
-
-[[power]]
-name = "bat_health"
-format = "{capacity}% health"  # Battery health percentage
-
-[[power]]
-name = "bat_cycles"
-format = "{cycle_count} cycles"  # Charge cycle count
-
-[[power]]
-name = "bat_tech"
-format = "{technology}"  # Battery technology
-
-[[power]]
-name = "bat_info"
-format = "{manufacturer} {model}"  # Manufacturer and model
-
-[[power]]
-name = "bat_serial"
-format = "{serial}"  # Serial number
-
-# Combined formats for different use cases
-[[power]]
-name = "bat_minimal"
-format = "{percentage}% {status}"  # Example: "85% Charging"
-
-[[power]]
-name = "bat_basic"
-format = "{percentage}% {status} ({time_left})"  # Example: "85% Charging (1:30)"
-
-[[power]]
-name = "bat_detailed"
-format = "{status} {percentage}% {power_now}W {temperature}°C"  # Example: "Charging 85% 45W 35°C"
-
-[[power]]
-name = "bat_technical"
-format = "{voltage}V {power_now}W"  # Example: "12.1V 45W"
-
-[[power]]
-name = "bat_health_info"
-format = "{capacity}% health, {cycle_count} cycles, {technology}"  # Example: "94% health, 234 cycles, Li-ion"
-
-[[power]]
-name = "bat_full"
-format = "{status} {percentage}% ({energy_now}/{energy_full}Wh) {power_now}W {temperature}°C"  # Most detailed format
+format = "{percentage}% ({power_now}W)"  # Shows percentage and power usage with sign
 
 [prompt]
 # Available variables with optional formatting:
@@ -119,15 +70,9 @@ format = "{status} {percentage}% ({energy_now}/{energy_full}Wh) {power_now}W {te
 #         bright_red, bright_green, bright_yellow, bright_blue,
 #         bright_magenta, bright_cyan, bright_white
 # Styles: bold, italic, normal
-#
-# Examples:
-# {"→":cyan,bold}         - Bold cyan arrow
-# {"Warning":red,italic}  - Italic red text
-# {time:green,bold}       - Bold green time
-# {$USER:yellow,normal}   - Normal yellow username
 format = """
 {"→":cyan} {"normal"} {"bold":red,bold} {"italic":yellow,italic}
--({datetime:cyan} {t} {host:magenta} {ip:magenta} {dir:green} {$USER:yellow})- {bat_technical}
+-({datetime:cyan} {t} {host:magenta} {ip:magenta} {dir:green} {$USER:yellow})- {bat}
 # """
 
 # Or another example:
