@@ -13,15 +13,6 @@ format = "(%H:%M:%S)"
 name = "tt"
 format = "(%H:%M:%S)"
 
-# Or you can use these alternative formats:
-# Full date and time with 12-hour clock
-# time_format = "%Y-%m-%d %I:%M:%S %p"  # Example: 2024-03-20 02:30:45 PM
-
-# Verbose format with day and month names
-# time_format = "%A, %B %d, %Y at %H:%M:%S"  # Example: Wednesday, March 20, 2024 at 14:30:45
-
-# Compact date and time
-# time_format = "%d/%m/%y %H:%M"  # Example: 20/03/24 14:30
 
 [[hostname]]
 name = "host"
@@ -29,15 +20,93 @@ name = "host"
 # format = "{}" # for future use
 
 [[ip]]
-name = "local"
+name = "ip"
 # IP-specific options could go here
-# interface = "eth0" 
+# interface = "lo"
 
 [[cwd]]
 name = "dir"
 # If true, shows only the current directory name
 # If false, shows full path
 shorten = false
+
+# Battery/Power configurations
+[[power]]
+name = "bat"
+format = "{percentage}"  # Raw percentage number
+
+[[power]]
+name = "bat_pct"
+format = "{percentage}%"  # Percentage with % symbol
+
+[[power]]
+name = "bat_status"
+format = "{status}"  # Charging/Discharging/Full/Not charging/Unknown
+
+[[power]]
+name = "bat_time"
+format = "{time_left}"  # Time remaining or time until full
+
+[[power]]
+name = "bat_power"
+format = "{power_now}W"  # Current power consumption
+
+[[power]]
+name = "bat_energy"
+format = "{energy_now}/{energy_full}Wh"  # Current and full energy
+
+[[power]]
+name = "bat_voltage"
+format = "{voltage}V"  # Battery voltage
+
+[[power]]
+name = "bat_temp"
+format = "{temperature}°C"  # Battery temperature
+
+[[power]]
+name = "bat_health"
+format = "{capacity}% health"  # Battery health percentage
+
+[[power]]
+name = "bat_cycles"
+format = "{cycle_count} cycles"  # Charge cycle count
+
+[[power]]
+name = "bat_tech"
+format = "{technology}"  # Battery technology
+
+[[power]]
+name = "bat_info"
+format = "{manufacturer} {model}"  # Manufacturer and model
+
+[[power]]
+name = "bat_serial"
+format = "{serial}"  # Serial number
+
+# Combined formats for different use cases
+[[power]]
+name = "bat_minimal"
+format = "{percentage}% {status}"  # Example: "85% Charging"
+
+[[power]]
+name = "bat_basic"
+format = "{percentage}% {status} ({time_left})"  # Example: "85% Charging (1:30)"
+
+[[power]]
+name = "bat_detailed"
+format = "{status} {percentage}% {power_now}W {temperature}°C"  # Example: "Charging 85% 45W 35°C"
+
+[[power]]
+name = "bat_technical"
+format = "{voltage}V {power_now}W"  # Example: "12.1V 45W"
+
+[[power]]
+name = "bat_health_info"
+format = "{capacity}% health, {cycle_count} cycles, {technology}"  # Example: "94% health, 234 cycles, Li-ion"
+
+[[power]]
+name = "bat_full"
+format = "{status} {percentage}% ({energy_now}/{energy_full}Wh) {power_now}W {temperature}°C"  # Most detailed format
 
 [prompt]
 # Available variables with optional formatting:
@@ -58,7 +127,7 @@ shorten = false
 # {$USER:yellow,normal}   - Normal yellow username
 format = """
 {"→":cyan} {"normal"} {"bold":red,bold} {"italic":yellow,italic}
--({datetime:cyan} {t} {host:magenta} {local:magenta} {dir:green} {$USER:yellow})-
+-({datetime:cyan} {t} {host:magenta} {ip:magenta} {dir:green} {$USER:yellow})- {bat_technical}
 # """
 
 # Or another example:

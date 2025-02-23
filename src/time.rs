@@ -1,4 +1,4 @@
-use chrono::{format::ParseError, Local};
+use chrono::Local;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -6,14 +6,12 @@ use std::time::Instant;
 
 #[derive(Debug)]
 pub enum TimeError {
-    Parse(ParseError),
     Format(String),
 }
 
 impl Display for TimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TimeError::Parse(e) => write!(f, "Parse error: {}", e),
             TimeError::Format(s) => write!(f, "Format error: {}", s),
         }
     }
@@ -42,27 +40,39 @@ fn default_time_format() -> String {
 }
 
 pub fn format_current_time(format: &str) -> Result<String, TimeError> {
-    let now = Local::now();
+    if format.is_empty() {
+        return Ok(String::new());
+    }
 
-    // Try to format the time
+    let now = Local::now();
     let result = std::panic::catch_unwind(|| now.format(format).to_string());
 
     match result {
         Ok(formatted) => {
-            // Check if the format was actually applied
-            if formatted == "Error" || (formatted.contains('%') && format.contains('%')) {
-                Ok(format.to_string())
+            if formatted.contains('%') && format.contains('%') {
+                Err(TimeError::Format(format.to_string()))
             } else {
                 Ok(formatted)
             }
         }
-        Err(_) => Ok(format.to_string()),
+        Err(_) => Err(TimeError::Format(format.to_string())),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_current_time_parse_error() {
+        // Test with a format string that would cause a parse error
+        let result = format_current_time("%");
+        assert!(result.is_err());
+        match result {
+            Err(TimeError::Format(s)) => assert_eq!(s, "%"),
+            _ => panic!("Expected Format error"),
+        }
+    }
 
     #[test]
     fn test_default_time_format() {
@@ -100,12 +110,11 @@ mod tests {
     fn test_format_current_time_invalid() {
         // Test with an invalid format string
         let result = format_current_time("%invalid");
-        assert!(result.is_ok());
-        let output = result.unwrap();
-        assert_eq!(
-            output, "%invalid",
-            "Invalid format string should be returned as-is"
-        );
+        assert!(result.is_err());
+        match result {
+            Err(TimeError::Format(msg)) => assert_eq!(msg, "%invalid"),
+            _ => panic!("Expected Format error"),
+        }
     }
 
     #[test]
@@ -159,8 +168,12 @@ mod tests {
     #[test]
     fn test_format_current_time_mixed_valid_invalid() {
         let format = "%Y-%invalid-%d";
-        let result = format_current_time(format).unwrap();
-        assert_eq!(result, "%Y-%invalid-%d");
+        let result = format_current_time(format);
+        assert!(result.is_err());
+        match result {
+            Err(TimeError::Format(msg)) => assert_eq!(msg, "%Y-%invalid-%d"),
+            _ => panic!("Expected Format error"),
+        }
     }
 
     #[test]

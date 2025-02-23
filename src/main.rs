@@ -7,7 +7,6 @@ use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fs;
-use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -26,6 +25,9 @@ use ip::Config as IpConfig;
 
 mod cwd;
 use cwd::Config as CwdConfig;
+
+mod power;
+use power::Config as PowerConfig;
 
 mod colors;
 
@@ -106,6 +108,8 @@ struct Config {
     ip: Vec<IpConfig>,
     #[serde(default)]
     cwd: Vec<CwdConfig>,
+    #[serde(default)]
+    power: Vec<PowerConfig>,
 }
 
 #[derive(Deserialize, Default)]
@@ -207,6 +211,7 @@ fn load_config(config_path: &PathBuf) -> Result<Config, ConfigError> {
     validate_section_names(&config.hostname, "hostname")?;
     validate_section_names(&config.ip, "ip")?;
     validate_section_names(&config.cwd, "cwd")?;
+    validate_section_names(&config.power, "power")?;
 
     validate_time_format(&config.time[0].format)?;
     Ok(config)
@@ -284,20 +289,12 @@ fn get_env_vars_from_format(format: &str) -> Vec<String> {
 }
 
 // First, create structs to hold the raw data
-struct SystemData {
-    hostname: Result<String, hostname::HostnameError>,
-    ip: Result<IpAddr, ip::IpConfigError>,
-    cwd: Result<String, cwd::CwdError>,
-    // Add other expensive data here
-}
-
-// Add these counters at the module level
-#[derive(Default)]
-struct FetchCounts {
-    hostname: usize,
-    ip: usize,
-    cwd: usize,
-}
+// struct SystemData {
+//     hostname: Result<String, hostname::HostnameError>,
+//     ip: Result<IpAddr, ip::IpConfigError>,
+//     cwd: Result<String, cwd::CwdError>,
+//     // Add other expensive data here
+// }
 
 // Add timing structs
 struct TimingData {
@@ -507,6 +504,67 @@ async fn main() {
             (cwd_vars, timing)
         }));
         task_names.push("CWD variables");
+
+        // Handle power variables
+        let config_clone = Arc::clone(&config);
+        let format_clone = prompt_format.clone();
+        tasks.push(tokio::spawn(async move {
+            let mut timing = TimingData {
+                fetch_time: std::time::Duration::default(),
+                format_time: std::time::Duration::default(),
+                fetch_count: 0,
+                skip_count: 0,
+            };
+
+            // Get battery info once
+            let fetch_start = Instant::now();
+            let battery_info = power::get_battery_info();
+            timing.fetch_time = fetch_start.elapsed();
+            timing.fetch_count = 1;
+
+            let format_start = Instant::now();
+            let mut power_vars = Vec::new();
+
+            for (i, power_config) in config_clone.power.iter().enumerate() {
+                let var_name = get_var_name(power_config, "power", i);
+                if format_uses_variable(&format_clone, &var_name) {
+                    match &battery_info {
+                        Ok(info) => {
+                            // Format according to the config's format string
+                            let formatted = power_config
+                                .format
+                                .replace("{percentage}", &info.percentage.to_string())
+                                .replace("{status}", &info.status)
+                                .replace("{time_left}", &info.time_left)
+                                .replace("{power_now}", &format!("{:.1}", info.power_now))
+                                .replace("{energy_now}", &format!("{:.1}", info.energy_now))
+                                .replace("{energy_full}", &format!("{:.1}", info.energy_full))
+                                .replace("{voltage}", &format!("{:.1}", info.voltage))
+                                .replace("{temperature}", &format!("{:.1}", info.temperature))
+                                .replace("{capacity}", &info.capacity.to_string())
+                                .replace("{cycle_count}", &info.cycle_count.to_string())
+                                .replace("{technology}", &info.technology)
+                                .replace("{manufacturer}", &info.manufacturer)
+                                .replace("{model}", &info.model)
+                                .replace("{serial}", &info.serial);
+                            power_vars.push((var_name, formatted));
+                        }
+                        Err(e) => {
+                            if validate {
+                                eprintln!("Warning: couldn't get battery info: {}", e);
+                            }
+                            power_vars.push((var_name, String::from("N/A")));
+                        }
+                    }
+                } else {
+                    timing.skip_count += 1;
+                }
+            }
+            timing.format_time = format_start.elapsed();
+
+            (power_vars, timing)
+        }));
+        task_names.push("Power variables");
 
         // Handle environment variables
         let format_clone = prompt_format.clone();
