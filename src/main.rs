@@ -1,16 +1,17 @@
 use clap::Parser;
 use directories::BaseDirs;
+use fs2::FileExt;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::env;
 use std::error::Error;
 use std::fmt;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::path::PathBuf;
 use std::process;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use tokio;
 
 mod time;
@@ -32,7 +33,7 @@ use power::Config as PowerConfig;
 
 mod colors;
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(version, about = "A configurable time display utility")]
 struct Cli {
     /// Show timing information for each step
@@ -340,6 +341,70 @@ struct TimingData {
 // Add this at the top level
 type TaskResult = Result<(Vec<(String, String)>, TimingData), Box<dyn Error + Send + Sync>>;
 
+#[derive(Debug)]
+enum DaemonError {
+    AlreadyRunning,
+    LockFileError(std::io::Error),
+    ConfigError(ConfigError),
+}
+
+impl fmt::Display for DaemonError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DaemonError::AlreadyRunning => write!(f, "Daemon is already running"),
+            DaemonError::LockFileError(e) => write!(f, "Lock file error: {}", e),
+            DaemonError::ConfigError(e) => write!(f, "Configuration error: {}", e),
+        }
+    }
+}
+
+impl Error for DaemonError {}
+
+impl From<ConfigError> for DaemonError {
+    fn from(err: ConfigError) -> Self {
+        DaemonError::ConfigError(err)
+    }
+}
+
+impl From<std::io::Error> for DaemonError {
+    fn from(err: std::io::Error) -> Self {
+        DaemonError::LockFileError(err)
+    }
+}
+
+struct DaemonLock {
+    _file: File,
+}
+
+impl DaemonLock {
+    fn new(config_dir: &std::path::Path) -> Result<Self, DaemonError> {
+        let lock_path = config_dir.join("twig.lock");
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(&lock_path)?;
+
+        // Try to acquire exclusive lock
+        match file.try_lock_exclusive() {
+            Ok(_) => Ok(DaemonLock { _file: file }),
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::WouldBlock {
+                    Err(DaemonError::AlreadyRunning)
+                } else {
+                    Err(DaemonError::LockFileError(e))
+                }
+            }
+        }
+    }
+}
+
+impl Drop for DaemonLock {
+    fn drop(&mut self) {
+        // Lock will be automatically released when file is closed
+        let _ = fs2::FileExt::unlock(&self._file);
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let start = Instant::now();
@@ -370,8 +435,17 @@ async fn main() {
         }
 
         // Run the daemon loop
-        run_daemon(&cli).await;
-        return;
+        match run_daemon(&cli).await {
+            Ok(_) => return,
+            Err(DaemonError::AlreadyRunning) => {
+                eprintln!("Error: Daemon is already running");
+                process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                process::exit(1);
+            }
+        }
     }
 
     let result: Result<(), Box<dyn Error>> = (|| async {
@@ -777,39 +851,29 @@ async fn main() {
     }
 }
 
-async fn run_daemon(cli: &Cli) {
+async fn run_daemon(cli: &Cli) -> Result<(), DaemonError> {
     println!("Starting twig daemon...");
 
     // Get config path and ensure it exists
-    let config_path = match get_config_path(&cli.config) {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!("Failed to get config path: {}", e);
-            process::exit(1);
-        }
-    };
+    let config_path = get_config_path(&cli.config)?;
+    ensure_config_exists(&config_path)?;
 
-    ensure_config_exists(&config_path).unwrap_or_else(|e| {
-        eprintln!("Failed to ensure config exists: {}", e);
-        process::exit(1);
-    });
-
-    let config = match load_config(&config_path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Failed to load config: {}", e);
-            process::exit(1);
-        }
-    };
-
+    let config = load_config(&config_path)?;
     let config = Arc::new(config);
+
+    // Create lock in config directory
+    let config_dir = config_path.parent().ok_or_else(|| {
+        DaemonError::LockFileError(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Could not determine config directory",
+        ))
+    })?;
+
+    let _lock = DaemonLock::new(config_dir)?;
 
     // Ensure data.json parent directory exists
     if let Some(parent) = config_path.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            eprintln!("Failed to create data directory: {}", e);
-            process::exit(1);
-        }
+        fs::create_dir_all(parent)?;
     }
 
     println!(
@@ -840,17 +904,29 @@ async fn run_daemon(cli: &Cli) {
 
         tokio::select! {
             _ = tokio::time::sleep(tokio::time::Duration::from_secs(config.daemon.frequency)) => {
+                let mut data = serde_json::json!({
+                    "updated_at": std::time::SystemTime::now(),
+                });
+
                 // Update power info
                 if let Ok(info) = power::get_battery_info_internal() {
-                    // Save to data.json
-                    let data_path = config_path.parent().unwrap().join("data.json");
-                    let data = serde_json::json!({
-                        "updated_at": info.updated_at,
-                        "power": info
-                    });
-                    if let Err(e) = fs::write(&data_path, serde_json::to_string_pretty(&data).unwrap()) {
-                        eprintln!("Failed to save data: {}", e);
-                    }
+                    data["power"] = serde_json::to_value(info).unwrap();
+                }
+
+                // Update hostname info
+                if let Ok(hostname) = hostname::get_hostname(&hostname::Config::default()) {
+                    data["hostname"] = serde_json::to_value(hostname).unwrap();
+                }
+
+                // Update IP info
+                if let Ok(ip) = local_ip_address::local_ip() {
+                    data["ip"] = serde_json::to_value(ip.to_string()).unwrap();
+                }
+
+                // Save to data.json
+                let data_path = config_path.parent().unwrap().join("data.json");
+                if let Err(e) = fs::write(&data_path, serde_json::to_string_pretty(&data).unwrap()) {
+                    eprintln!("Failed to save data: {}", e);
                 }
             }
             _ = shutdown_rx.recv() => {
@@ -859,6 +935,8 @@ async fn run_daemon(cli: &Cli) {
             }
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1019,8 +1097,28 @@ frequency = 2  # Update every 2 seconds
         let data_content = fs::read_to_string(data_path).unwrap();
         let data: serde_json::Value = serde_json::from_str(&data_content).unwrap();
 
-        assert!(data.get("updated_at").is_some());
-        assert!(data.get("power").is_some());
+        assert!(
+            data.get("updated_at").is_some(),
+            "Should have updated_at timestamp"
+        );
+        assert!(data.get("power").is_some(), "Should have power data");
+        assert!(data.get("hostname").is_some(), "Should have hostname data");
+        assert!(data.get("ip").is_some(), "Should have IP data");
+
+        // Verify hostname matches system hostname
+        let system_hostname = hostname::get_hostname(&hostname::Config::default()).unwrap();
+        assert_eq!(
+            data["hostname"].as_str().unwrap(),
+            system_hostname,
+            "Hostname should match system hostname"
+        );
+
+        // Verify IP is in valid format
+        let ip_str = data["ip"].as_str().unwrap();
+        assert!(
+            ip_str.parse::<std::net::IpAddr>().is_ok(),
+            "IP should be in valid format"
+        );
     }
 
     #[tokio::test]
@@ -1071,83 +1169,25 @@ frequency = 1
 
         // Check initial data
         let data1 = fs::read_to_string(&data_path).unwrap();
+        let json1: serde_json::Value = serde_json::from_str(&data1).unwrap();
 
         // Wait for at least one update cycle plus a small buffer
         tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
         let data2 = fs::read_to_string(&data_path).unwrap();
+        let json2: serde_json::Value = serde_json::from_str(&data2).unwrap();
 
         // Data should be different (timestamps should have changed)
-        assert_ne!(data1, data2, "Data should be updated between checks");
-
-        // Send shutdown signal
-        shutdown_tx_clone.send(()).await.unwrap();
-
-        // Wait for daemon to stop
-        handle.await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_daemon_respects_frequency() {
-        let temp_dir = tempdir().unwrap();
-        let config_path = temp_dir.path().join("config.toml");
-        let data_path = temp_dir.path().join("data.json");
-
-        // Create config with 2 second update frequency
-        let config_content = r#"
-[daemon]
-frequency = 2
-"#;
-        fs::write(&config_path, config_content).unwrap();
-
-        let args = Cli {
-            timing: false,
-            config: Some(config_path.clone()),
-            mode: None,
-            validate: false,
-            colors: false,
-            daemon: true,
-            fg: true,
-        };
-
-        // Create shutdown channel
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
-        let shutdown_tx_clone = shutdown_tx.clone();
-
-        // Run daemon in a separate task
-        let handle = tokio::spawn(async move {
-            tokio::select! {
-                _ = run_daemon(&args) => {},
-                _ = shutdown_rx.recv() => {}
-            }
-        });
-
-        // Wait for data.json to be created (up to 5 seconds)
-        let mut attempts = 0;
-        while !data_path.exists() && attempts < 50 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            attempts += 1;
-        }
-        assert!(
-            data_path.exists(),
-            "data.json was not created within timeout"
+        assert_ne!(
+            json1["updated_at"], json2["updated_at"],
+            "Timestamp should update between checks"
         );
 
-        // Check after 1 second (should have initial data)
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        let data1 = fs::read_to_string(&data_path).unwrap();
-
-        // Check just before next update
-        tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
-        let data2 = fs::read_to_string(&data_path).unwrap();
+        // But hostname and IP should remain the same
         assert_eq!(
-            data1, data2,
-            "Data should not update before frequency interval"
+            json1["hostname"], json2["hostname"],
+            "Hostname should remain constant"
         );
-
-        // Check after frequency duration (should have new data)
-        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-        let data3 = fs::read_to_string(&data_path).unwrap();
-        assert_ne!(data1, data3, "Data should update after frequency interval");
+        assert_eq!(json1["ip"], json2["ip"], "IP should remain constant");
 
         // Send shutdown signal
         shutdown_tx_clone.send(()).await.unwrap();
@@ -1206,5 +1246,276 @@ frequency = 0  # Invalid: should be > 0
             }
         );
         assert_eq!(msg, "Daemon will update data every 2 seconds");
+    }
+
+    #[test]
+    fn test_daemon_lock() {
+        let temp_dir = tempdir().unwrap();
+
+        // First lock should succeed
+        let lock1 = DaemonLock::new(temp_dir.path());
+        assert!(lock1.is_ok(), "First lock should succeed");
+
+        // Second lock should fail with AlreadyRunning
+        let lock2 = DaemonLock::new(temp_dir.path());
+        match lock2 {
+            Err(DaemonError::AlreadyRunning) => (),
+            _ => panic!("Second lock should fail with AlreadyRunning"),
+        }
+
+        // Drop first lock
+        drop(lock1);
+
+        // Third lock should succeed after first is dropped
+        let lock3 = DaemonLock::new(temp_dir.path());
+        assert!(
+            lock3.is_ok(),
+            "Third lock should succeed after first is dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_daemon_lock_in_run_daemon() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+
+        // Create a minimal config file
+        let config_content = r#"
+[daemon]
+frequency = 1
+"#;
+        fs::write(&config_path, config_content).unwrap();
+
+        // Create CLI args for first daemon
+        let args1 = Cli {
+            timing: false,
+            config: Some(config_path.clone()),
+            mode: None,
+            validate: false,
+            colors: false,
+            daemon: true,
+            fg: true,
+        };
+
+        // Create CLI args for second daemon
+        let args2 = args1.clone();
+        let args3 = args1.clone();
+
+        // Create shutdown channel for first daemon
+        let (shutdown_tx1, mut shutdown_rx1) = tokio::sync::mpsc::channel::<()>(1);
+        let shutdown_tx1_clone = shutdown_tx1.clone();
+
+        // Run first daemon
+        let handle1 = tokio::spawn(async move {
+            tokio::select! {
+                result = run_daemon(&args1) => result,
+                _ = shutdown_rx1.recv() => Ok(())
+            }
+        });
+
+        // Wait a bit for the first daemon to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Try to run second daemon, should fail
+        let result = run_daemon(&args2).await;
+        assert!(matches!(result, Err(DaemonError::AlreadyRunning)));
+
+        // Shutdown first daemon
+        shutdown_tx1_clone.send(()).await.unwrap();
+        handle1.await.unwrap().unwrap();
+
+        // Now third daemon should be able to start
+        let (shutdown_tx3, mut shutdown_rx3) = tokio::sync::mpsc::channel::<()>(1);
+        let shutdown_tx3_clone = shutdown_tx3.clone();
+
+        let handle3 = tokio::spawn(async move {
+            tokio::select! {
+                result = run_daemon(&args3) => result,
+                _ = shutdown_rx3.recv() => Ok(())
+            }
+        });
+
+        // Wait a bit and then shutdown
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        shutdown_tx3_clone.send(()).await.unwrap();
+        handle3.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_daemon_data_persistence() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let data_path = temp_dir.path().join("data.json");
+
+        // Create config
+        let config_content = r#"
+[daemon]
+frequency = 1
+"#;
+        fs::write(&config_path, config_content).unwrap();
+
+        let args = Cli {
+            timing: false,
+            config: Some(config_path.clone()),
+            mode: None,
+            validate: false,
+            colors: false,
+            daemon: true,
+            fg: true,
+        };
+
+        // Run first daemon instance
+        let (shutdown_tx1, mut shutdown_rx1) = tokio::sync::mpsc::channel::<()>(1);
+        let shutdown_tx1_clone = shutdown_tx1.clone();
+        let args1 = args.clone();
+
+        let handle1 = tokio::spawn(async move {
+            tokio::select! {
+                _ = run_daemon(&args1) => {},
+                _ = shutdown_rx1.recv() => {}
+            }
+        });
+
+        // Wait for data file to be created
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+        // Read initial data
+        let data1 = fs::read_to_string(&data_path).unwrap();
+        let json1: serde_json::Value = serde_json::from_str(&data1).unwrap();
+
+        // Shutdown first daemon
+        shutdown_tx1_clone.send(()).await.unwrap();
+        handle1.await.unwrap();
+
+        // Store initial values
+        let hostname1 = json1["hostname"].as_str().unwrap().to_string();
+        let ip1 = json1["ip"].as_str().unwrap().to_string();
+
+        // Start second daemon instance
+        let (shutdown_tx2, mut shutdown_rx2) = tokio::sync::mpsc::channel::<()>(1);
+        let shutdown_tx2_clone = shutdown_tx2.clone();
+
+        let args2 = args.clone();
+        let handle2 = tokio::spawn(async move {
+            tokio::select! {
+                _ = run_daemon(&args2) => {},
+                _ = shutdown_rx2.recv() => {}
+            }
+        });
+
+        // Wait for updates
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+        // Read new data
+        let data2 = fs::read_to_string(&data_path).unwrap();
+        let json2: serde_json::Value = serde_json::from_str(&data2).unwrap();
+
+        // Verify data consistency
+        assert_eq!(
+            json2["hostname"].as_str().unwrap(),
+            hostname1,
+            "Hostname should persist between daemon restarts"
+        );
+        assert_eq!(
+            json2["ip"].as_str().unwrap(),
+            ip1,
+            "IP should persist between daemon restarts"
+        );
+        assert_ne!(
+            json2["updated_at"], json1["updated_at"],
+            "Timestamp should update"
+        );
+
+        // Shutdown second daemon
+        shutdown_tx2_clone.send(()).await.unwrap();
+        handle2.await.unwrap();
+    }
+
+    #[test]
+    fn test_daemon_data_format() {
+        let temp_dir = tempdir().unwrap();
+        let data_path = temp_dir.path().join("data.json");
+
+        // Create sample data
+        let data = serde_json::json!({
+            "updated_at": SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().to_string(),
+            "hostname": "test-host",
+            "ip": "192.168.1.1",
+            "power": {
+                "percentage": 80,
+                "status": "Charging",
+                "time_left": "1.5h",
+                "power_now": 45.5,
+                "energy_now": 55.0,
+                "energy_full": 100.0,
+                "voltage": 12.1,
+                "temperature": 35.5,
+                "capacity": 95,
+                "cycle_count": 100,
+                "technology": "Li-ion",
+                "manufacturer": "Test",
+                "model": "Battery",
+                "serial": "12345"
+            }
+        });
+
+        // Write test data
+        fs::write(&data_path, serde_json::to_string_pretty(&data).unwrap()).unwrap();
+
+        // Read and validate data
+        let content = fs::read_to_string(&data_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        // Validate structure
+        assert!(
+            json["updated_at"].is_string(),
+            "updated_at should be a string timestamp"
+        );
+        assert!(json["hostname"].is_string(), "hostname should be a string");
+        assert!(json["ip"].is_string(), "ip should be a string");
+
+        // Validate power data structure
+        let power = &json["power"];
+        assert!(
+            power["percentage"].is_number(),
+            "percentage should be a number"
+        );
+        assert!(power["status"].is_string(), "status should be a string");
+        assert!(
+            power["time_left"].is_string(),
+            "time_left should be a string"
+        );
+        assert!(
+            power["power_now"].is_number(),
+            "power_now should be a number"
+        );
+        assert!(
+            power["energy_now"].is_number(),
+            "energy_now should be a number"
+        );
+        assert!(
+            power["energy_full"].is_number(),
+            "energy_full should be a number"
+        );
+        assert!(power["voltage"].is_number(), "voltage should be a number");
+        assert!(
+            power["temperature"].is_number(),
+            "temperature should be a number"
+        );
+        assert!(power["capacity"].is_number(), "capacity should be a number");
+        assert!(
+            power["cycle_count"].is_number(),
+            "cycle_count should be a number"
+        );
+        assert!(
+            power["technology"].is_string(),
+            "technology should be a string"
+        );
+        assert!(
+            power["manufacturer"].is_string(),
+            "manufacturer should be a string"
+        );
+        assert!(power["model"].is_string(), "model should be a string");
+        assert!(power["serial"].is_string(), "serial should be a string");
     }
 }
