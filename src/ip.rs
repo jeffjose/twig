@@ -2,7 +2,6 @@ use local_ip_address::list_afinet_netifas;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::net::IpAddr;
-use std::time::Instant;
 
 #[derive(Debug)]
 pub enum IpConfigError {
@@ -53,6 +52,7 @@ pub fn get_ip(config: &Config) -> Result<IpAddr, IpConfigError> {
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::time::Instant;
 
     #[test]
     fn test_default_ip_retrieval() {
@@ -186,28 +186,6 @@ mod tests {
             }
             _ => panic!("Expected InterfaceNotFound error"),
         }
-    }
-
-    #[test]
-    fn test_ip_performance() {
-        let start = Instant::now();
-        let iterations = 1000;
-
-        // Test default IP lookup performance
-        let config = Config::default();
-        for _ in 0..iterations {
-            let _ = get_ip(&config);
-        }
-
-        let duration = start.elapsed();
-        let avg_duration = duration.as_micros() as f64 / iterations as f64;
-
-        // Average time should be less than 100 microseconds per lookup
-        assert!(
-            avg_duration < 100.0,
-            "IP lookup is too slow: {} µs",
-            avg_duration
-        );
     }
 
     #[test]

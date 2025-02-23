@@ -1,23 +1,22 @@
 use chrono::Local;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
-use std::time::Instant;
+use std::error::Error;
+use std::fmt;
 
 #[derive(Debug)]
 pub enum TimeError {
     Format(String),
 }
 
-impl Display for TimeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for TimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TimeError::Format(s) => write!(f, "Format error: {}", s),
         }
     }
 }
 
-impl std::error::Error for TimeError {}
+impl Error for TimeError {}
 
 #[derive(Deserialize, Serialize)]
 pub struct TimeConfig {
@@ -62,6 +61,8 @@ pub fn format_current_time(format: &str) -> Result<String, TimeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use regex::Regex;
+    use std::time::Instant;
 
     #[test]
     fn test_format_current_time_parse_error() {
