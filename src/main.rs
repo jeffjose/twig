@@ -813,8 +813,13 @@ async fn run_daemon(cli: &Cli) {
     }
 
     println!(
-        "Daemon will update data every {} seconds",
-        config.daemon.frequency
+        "Daemon will update data every {} {}",
+        config.daemon.frequency,
+        if config.daemon.frequency == 1 {
+            "second"
+        } else {
+            "seconds"
+        }
     );
 
     // Create a channel for shutdown signal
@@ -1166,5 +1171,40 @@ frequency = 0  # Invalid: should be > 0
 
         // Should fall back to default frequency
         assert_eq!(config.daemon.frequency, 1);
+    }
+
+    #[test]
+    fn test_daemon_message_grammar() {
+        // Test singular form
+        let config = Config {
+            daemon: DaemonConfig { frequency: 1 },
+            ..Default::default()
+        };
+        let msg = format!(
+            "Daemon will update data every {} {}",
+            config.daemon.frequency,
+            if config.daemon.frequency == 1 {
+                "second"
+            } else {
+                "seconds"
+            }
+        );
+        assert_eq!(msg, "Daemon will update data every 1 second");
+
+        // Test plural form
+        let config = Config {
+            daemon: DaemonConfig { frequency: 2 },
+            ..Default::default()
+        };
+        let msg = format!(
+            "Daemon will update data every {} {}",
+            config.daemon.frequency,
+            if config.daemon.frequency == 1 {
+                "second"
+            } else {
+                "seconds"
+            }
+        );
+        assert_eq!(msg, "Daemon will update data every 2 seconds");
     }
 }
