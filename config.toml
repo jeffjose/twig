@@ -109,3 +109,8 @@ frequency = 1
 # When using cached data in interactive mode, data older than this will be refreshed
 # Defaults to 5 seconds if not specified
 stale_after = 5
+
+# Path to store daemon data (JSON format)
+# Can be absolute or relative to config directory
+# Defaults to "data.json" in the same directory as config.toml
+data_file = "data.json"

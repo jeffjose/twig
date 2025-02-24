@@ -148,6 +148,9 @@ struct DaemonConfig {
 
     #[serde(default = "default_stale_after")]
     stale_after: u64,
+
+    #[serde(default = "default_data_file")]
+    data_file: PathBuf,
 }
 
 impl Default for DaemonConfig {
@@ -155,6 +158,7 @@ impl Default for DaemonConfig {
         Self {
             frequency: default_daemon_frequency(),
             stale_after: default_stale_after(),
+            data_file: default_data_file(),
         }
     }
 }
@@ -181,6 +185,11 @@ fn default_daemon_frequency() -> u64 {
 
 fn default_stale_after() -> u64 {
     5 // Default to 5 seconds
+}
+
+fn default_data_file() -> PathBuf {
+    // By default, store data.json in the same directory as config.toml
+    PathBuf::from("data.json")
 }
 
 fn get_config_path(cli_config: &Option<PathBuf>) -> Result<PathBuf, ConfigError> {
@@ -422,8 +431,20 @@ impl Drop for DaemonLock {
     }
 }
 
-fn read_cached_data(config_path: &PathBuf, stale_after: u64) -> Option<serde_json::Value> {
-    let data_path = config_path.parent().unwrap().join("data.json");
+fn get_data_file_path(config_path: &PathBuf, config: &Config) -> PathBuf {
+    if config.daemon.data_file.is_absolute() {
+        config.daemon.data_file.clone()
+    } else {
+        config_path.parent().unwrap().join(&config.daemon.data_file)
+    }
+}
+
+fn read_cached_data(
+    config_path: &PathBuf,
+    stale_after: u64,
+    config: &Config,
+) -> Option<serde_json::Value> {
+    let data_path = get_data_file_path(config_path, config);
     if !data_path.exists() {
         return None;
     }
@@ -450,6 +471,14 @@ fn read_cached_data(config_path: &PathBuf, stale_after: u64) -> Option<serde_jso
         }
         Err(_) => None,
     }
+}
+
+#[derive(Clone)]
+struct SharedState {
+    config: Arc<Config>,
+    config_path: PathBuf,
+    prompt_format: String,
+    validate: bool,
 }
 
 #[tokio::main]
@@ -503,24 +532,26 @@ async fn main() {
 
         // Time the config loading
         let config_start = Instant::now();
-        let config = load_config(&config_path)?;
+        let config = Arc::new(load_config(&config_path)?);
         let config_duration = config_start.elapsed();
+
+        // Create shared state
+        let state = SharedState {
+            config: config.clone(),
+            config_path: config_path.clone(),
+            prompt_format: config.prompt.format.clone(),
+            validate: cli.validate,
+        };
 
         // Time the variable gathering
         let vars_start = Instant::now();
-
-        // Create shared config and cli references
-        let config = Arc::new(config);
-        let validate = cli.validate;
-        let prompt_format = config.prompt.format.clone();
 
         // Create parallel tasks for each config section
         let mut tasks: Vec<tokio::task::JoinHandle<TaskResult>> = Vec::new();
         let mut task_names = Vec::new();
 
         // Handle time variables
-        let config_clone = Arc::clone(&config);
-        let format_clone = prompt_format.clone();
+        let state_clone = state.clone();
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
@@ -532,9 +563,9 @@ async fn main() {
 
             let format_start = Instant::now();
             let mut time_vars = Vec::new();
-            for (i, time_config) in config_clone.time.iter().enumerate() {
+            for (i, time_config) in state_clone.config.time.iter().enumerate() {
                 let var_name = get_var_name(time_config, "time", i);
-                if format_uses_variable(&format_clone, &var_name) {
+                if format_uses_variable(&state_clone.prompt_format, &var_name) {
                     let fetch_start = Instant::now();
                     match format_current_time(&time_config.format) {
                         Ok(time) => {
@@ -543,7 +574,7 @@ async fn main() {
                             time_vars.push((var_name, time));
                         }
                         Err(e) => {
-                            if validate {
+                            if state_clone.validate {
                                 eprintln!("Warning: couldn't format time: {}", e);
                             }
                         }
@@ -559,9 +590,7 @@ async fn main() {
         task_names.push("Time variables");
 
         // Handle hostname variables
-        let config_clone = Arc::clone(&config);
-        let format_clone = prompt_format.clone();
-        let config_path_clone = config_path.clone();
+        let state_clone = state.clone();
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
@@ -575,9 +604,11 @@ async fn main() {
             let mut hostname_vars = Vec::new();
 
             // Try to get hostname from cache first
-            let hostname_data = if let Some(cached) =
-                read_cached_data(&config_path_clone, config_clone.daemon.stale_after)
-            {
+            let hostname_data = if let Some(cached) = read_cached_data(
+                &state_clone.config_path,
+                state_clone.config.daemon.stale_after,
+                &state_clone.config,
+            ) {
                 timing.cached_count = 1;
                 Ok(cached["hostname"].as_str().unwrap().to_string())
             } else {
@@ -589,15 +620,15 @@ async fn main() {
                 result
             };
 
-            for (i, hostname_config) in config_clone.hostname.iter().enumerate() {
+            for (i, hostname_config) in state_clone.config.hostname.iter().enumerate() {
                 let var_name = get_var_name(hostname_config, "hostname", i);
-                if format_uses_variable(&format_clone, &var_name) {
+                if format_uses_variable(&state_clone.prompt_format, &var_name) {
                     match &hostname_data {
                         Ok(hostname) => {
                             hostname_vars.push((var_name, hostname.clone()));
                         }
                         Err(e) => {
-                            if validate {
+                            if state_clone.validate {
                                 eprintln!("Warning: couldn't get hostname: {}", e);
                             }
                         }
@@ -613,9 +644,7 @@ async fn main() {
         task_names.push("Hostname variables");
 
         // Handle IP variables
-        let config_clone = Arc::clone(&config);
-        let format_clone = prompt_format.clone();
-        let config_path_clone = config_path.clone();
+        let state_clone = state.clone();
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
@@ -629,15 +658,17 @@ async fn main() {
             let mut ip_vars = Vec::new();
 
             // Try to get IP from cache first
-            let ip_data = if let Some(cached) =
-                read_cached_data(&config_path_clone, config_clone.daemon.stale_after)
-            {
+            let ip_data = if let Some(cached) = read_cached_data(
+                &state_clone.config_path,
+                state_clone.config.daemon.stale_after,
+                &state_clone.config,
+            ) {
                 timing.cached_count = 1;
                 Ok(cached["ip"].as_str().unwrap().to_string())
             } else {
                 // Fall back to live data
                 let fetch_start = Instant::now();
-                let result = match &config_clone.ip.iter().find(|c| c.interface.is_some()) {
+                let result = match &state_clone.config.ip.iter().find(|c| c.interface.is_some()) {
                     Some(config) => ip::get_ip(config).map(|ip| ip.to_string()),
                     None => local_ip_address::local_ip()
                         .map(|ip| ip.to_string())
@@ -648,15 +679,15 @@ async fn main() {
                 result
             };
 
-            for (i, ip_config) in config_clone.ip.iter().enumerate() {
+            for (i, ip_config) in state_clone.config.ip.iter().enumerate() {
                 let var_name = get_var_name(ip_config, "ip", i);
-                if format_uses_variable(&format_clone, &var_name) {
+                if format_uses_variable(&state_clone.prompt_format, &var_name) {
                     match &ip_data {
                         Ok(ip) => {
                             ip_vars.push((var_name, ip.clone()));
                         }
                         Err(e) => {
-                            if validate {
+                            if state_clone.validate {
                                 eprintln!("Warning: couldn't get IP: {}", e);
                             }
                         }
@@ -672,8 +703,7 @@ async fn main() {
         task_names.push("IP variables");
 
         // Handle CWD variables
-        let config_clone = Arc::clone(&config);
-        let format_clone = prompt_format.clone();
+        let state_clone = state.clone();
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
@@ -685,9 +715,9 @@ async fn main() {
 
             let format_start = Instant::now();
             let mut cwd_vars = Vec::new();
-            for (i, cwd_config) in config_clone.cwd.iter().enumerate() {
+            for (i, cwd_config) in state_clone.config.cwd.iter().enumerate() {
                 let var_name = get_var_name(cwd_config, "cwd", i);
-                if format_uses_variable(&format_clone, &var_name) {
+                if format_uses_variable(&state_clone.prompt_format, &var_name) {
                     let fetch_start = Instant::now();
                     match cwd::get_cwd(cwd_config) {
                         Ok(dir) => {
@@ -696,7 +726,7 @@ async fn main() {
                             cwd_vars.push((var_name, dir));
                         }
                         Err(e) => {
-                            if validate {
+                            if state_clone.validate {
                                 eprintln!("Warning: couldn't get current directory: {}", e);
                             }
                         }
@@ -712,9 +742,7 @@ async fn main() {
         task_names.push("CWD variables");
 
         // Handle power variables
-        let config_clone = Arc::clone(&config);
-        let format_clone = prompt_format.clone();
-        let config_path_clone = config_path.clone();
+        let state_clone = state.clone();
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
@@ -728,9 +756,11 @@ async fn main() {
             let format_start = Instant::now();
 
             // Try to get power info from cache first
-            let battery_info = if let Some(cached) =
-                read_cached_data(&config_path_clone, config_clone.daemon.stale_after)
-            {
+            let battery_info = if let Some(cached) = read_cached_data(
+                &state_clone.config_path,
+                state_clone.config.daemon.stale_after,
+                &state_clone.config,
+            ) {
                 timing.cached_count = 1;
                 Ok(serde_json::from_value(cached["power"].clone()).unwrap())
             } else {
@@ -743,9 +773,9 @@ async fn main() {
             };
 
             if let Ok(info) = &battery_info {
-                for (i, power_config) in config_clone.power.iter().enumerate() {
+                for (i, power_config) in state_clone.config.power.iter().enumerate() {
                     let var_name = get_var_name(power_config, "power", i);
-                    if format_uses_variable(&format_clone, &var_name) {
+                    if format_uses_variable(&state_clone.prompt_format, &var_name) {
                         let formatted = power_config
                             .format
                             .replace("{percentage}", &info.percentage.to_string())
@@ -775,7 +805,7 @@ async fn main() {
                     }
                 }
             } else if let Err(e) = &battery_info {
-                if validate {
+                if state_clone.validate {
                     eprintln!("Warning: couldn't get battery info: {}", e);
                 }
             }
@@ -786,7 +816,7 @@ async fn main() {
         task_names.push("Power variables");
 
         // Handle environment variables
-        let format_clone = prompt_format.clone();
+        let state_clone = state.clone();
         tasks.push(tokio::spawn(async move {
             let mut timing = TimingData {
                 fetch_time: std::time::Duration::default(),
@@ -798,7 +828,7 @@ async fn main() {
 
             let format_start = Instant::now();
             let mut env_vars = Vec::new();
-            for var_name in get_env_vars_from_format(&format_clone) {
+            for var_name in get_env_vars_from_format(&state_clone.prompt_format) {
                 let fetch_start = Instant::now();
                 if let Ok(value) = env::var(&var_name) {
                     timing.fetch_time += fetch_start.elapsed();
@@ -826,12 +856,12 @@ async fn main() {
                     task_timings.push((task_name, timing));
                 }
                 Ok(Err(e)) => {
-                    if validate {
+                    if state.validate {
                         eprintln!("Warning: task failed: {}", e);
                     }
                 }
                 Err(e) => {
-                    if validate {
+                    if state.validate {
                         eprintln!("Warning: task panicked: {}", e);
                     }
                 }
@@ -848,9 +878,9 @@ async fn main() {
 
         let template_start = Instant::now();
         let output = format_template(
-            &config.prompt.format,
+            &state.config.prompt.format,
             &template_vars,
-            validate,
+            state.validate,
             cli.mode.as_deref(),
         )?;
         println!("{}", output);
@@ -861,9 +891,9 @@ async fn main() {
 
             eprintln!("\nTiming information:");
 
-            // Check daemon status by examining data.json
-            let config_path = get_config_path(&cli.config)?;
-            let data_path = config_path.parent().unwrap().join("data.json");
+            // Check daemon status by examining data file
+            let data_path = get_data_file_path(&state.config_path, &state.config);
+
             let daemon_status = if let Ok(content) = fs::read_to_string(&data_path) {
                 if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
                     if let Some(updated_at) = data["updated_at"].as_object() {
@@ -877,7 +907,7 @@ async fn main() {
                                 .unwrap()
                                 .as_secs();
                             let age = now.saturating_sub(secs);
-                            if age <= config.daemon.frequency * 2 {
+                            if age <= state.config.daemon.frequency * 2 {
                                 format!("Running (last update {} seconds ago)", age)
                             } else {
                                 format!("Not running (last update {} seconds ago)", age)
@@ -1002,32 +1032,43 @@ async fn run_daemon(cli: &Cli) -> Result<(), DaemonError> {
             }
         );
 
+        // Get data file path
+        let data_path = get_data_file_path(&config_path, &config);
+
+        // Create data file directory if it doesn't exist
+        if let Some(parent) = data_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        println!("Data will be stored in: {}", data_path.display());
+
         // Create a channel for shutdown signal
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
 
         // Handle Ctrl+C for graceful shutdown
         let shutdown_tx_clone = shutdown_tx.clone();
-        let ctrl_c_handle = tokio::spawn(async move {
+        let ctrl_c_future = async move {
             if let Ok(()) = tokio::signal::ctrl_c().await {
                 println!("\nReceived Ctrl+C, shutting down...");
                 let _ = shutdown_tx_clone.send(()).await;
             }
-        });
+        };
 
         // Add test-specific timeout
         #[cfg(test)]
-        let test_timeout = {
+        let test_timeout_future = {
             let shutdown_tx = shutdown_tx.clone();
-            tokio::spawn(async move {
+            async move {
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 let _ = shutdown_tx.send(()).await;
-            })
+            }
         };
 
         // Main daemon loop with proper shutdown handling
         let main_loop = async {
             loop {
                 let config = Arc::clone(&config);
+                let data_path = data_path.clone();
 
                 tokio::select! {
                     _ = tokio::time::sleep(tokio::time::Duration::from_secs(config.daemon.frequency)) => {
@@ -1071,8 +1112,7 @@ async fn run_daemon(cli: &Cli) -> Result<(), DaemonError> {
                             Err(_) => blocks_failed += 1,
                         }
 
-                        // Save to data.json
-                        let data_path = config_path.parent().unwrap().join("data.json");
+                        // Save to data file
                         match fs::write(&data_path, serde_json::to_string_pretty(&data).unwrap()) {
                             Ok(_) => blocks_processed += 1,
                             Err(e) => {
@@ -1102,14 +1142,14 @@ async fn run_daemon(cli: &Cli) -> Result<(), DaemonError> {
         #[cfg(not(test))]
         tokio::select! {
             _ = main_loop => {},
-            _ = ctrl_c_handle => {},
+            _ = ctrl_c_future => {},
         }
 
         #[cfg(test)]
         tokio::select! {
             _ = main_loop => {},
-            _ = ctrl_c_handle => {},
-            _ = test_timeout => {},
+            _ = ctrl_c_future => {},
+            _ = test_timeout_future => {},
         }
     }
 
