@@ -24,3 +24,4 @@ parking_lot = "0.12"                               # For fast, simple mutex
 libc = "0.2"                                       # For Unix system calls
 fs2 = "0.4"                                        # For file locking
 os_pipe = "1.1"                                    # For capturing stdout in tests
+glob = "0.3"                                       # For glob pattern matching

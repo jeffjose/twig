@@ -1130,6 +1130,7 @@ dependencies = [
  "directories",
  "fs2",
  "futures",
+ "glob",
  "hostname",
  "lazy_static",
  "libc",
