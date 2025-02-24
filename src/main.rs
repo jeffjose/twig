@@ -1016,22 +1016,42 @@ async fn main() {
                 result
             };
 
-            if let Ok(_info) = &battery_info {
+            if let Ok(info) = &battery_info {
                 for (i, power_config) in state_clone.config.power.iter().enumerate() {
                     let var_name = get_var_name(power_config, "power", i);
                     if format_uses_variable(&state_clone.prompt_format, &var_name) {
-                        if power_config.deferred
-                            && !is_section_requested(
-                                &var_name,
-                                &state_clone.config_path,
-                                &state_clone.config,
-                            )
-                        {
+                        if power_config.deferred && !is_section_requested(&var_name, &state_clone.config_path, &state_clone.config) {
                             power_vars.push((var_name, String::new()));
                             timing.skip_count += 1;
                             timing.deferred_count += 1;
                             continue;
                         }
+                        let formatted = power_config
+                            .format
+                            .replace("{percentage}", &info.percentage.to_string())
+                            .replace("{status}", &info.status)
+                            .replace("{time_left}", &info.time_left)
+                            .replace(
+                                "{power_now}",
+                                &if info.power_now.abs() < 0.01 {
+                                    "0.0".to_string()
+                                } else {
+                                    format!("{:+.1}", info.power_now)
+                                },
+                            )
+                            .replace("{energy_now}", &format!("{:.1}", info.energy_now))
+                            .replace("{energy_full}", &format!("{:.1}", info.energy_full))
+                            .replace("{voltage}", &format!("{:.1}", info.voltage))
+                            .replace("{temperature}", &format!("{:.1}", info.temperature))
+                            .replace("{capacity}", &info.capacity.to_string())
+                            .replace("{cycle_count}", &info.cycle_count.to_string())
+                            .replace("{technology}", &info.technology)
+                            .replace("{manufacturer}", &info.manufacturer)
+                            .replace("{model}", &info.model)
+                            .replace("{serial}", &info.serial);
+                        power_vars.push((var_name, formatted));
+                    } else {
+                        timing.skip_count += 1;
                     }
                 }
             } else if let Err(e) = &battery_info {
@@ -1875,7 +1895,7 @@ mod tests {
             fetch_count: 3,
             cached_count: 2,
             skip_count: 2,
-            deferred_count: 0,
+            deferred_count: 3,
             cached_time: std::time::Duration::default(),
             live_time: std::time::Duration::default(),
             skip_time: std::time::Duration::default(),
