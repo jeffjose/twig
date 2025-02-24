@@ -1,5 +1,4 @@
 use colored::*;
-use glob;
 use serde::{Deserialize, Serialize};
 
 pub fn print_color_test() {
@@ -47,6 +46,7 @@ pub struct ColorConfig {
 }
 
 impl ColorConfig {
+    #[cfg(test)]
     pub fn get_color_for_value(&self, value: &str) -> Option<&str> {
         // First try exact matches
         for condition in &self.colors {
