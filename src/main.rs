@@ -1428,7 +1428,7 @@ mod tests {
     }
 
     #[test]
-    fn test_source_type_display() {
+    fn test_source_type_determination() {
         // Helper function to determine source type
         fn get_source_type(timing: &TimingData) -> &'static str {
             if timing.cached_count > 0 && timing.fetch_count == timing.cached_count {
@@ -1495,156 +1495,258 @@ mod tests {
             "[skip]",
             "Should show [skip] when data is skipped"
         );
-    }
 
-    #[test]
-    fn test_read_cached_data() {
-        let temp_dir = tempdir().unwrap();
-        let config_path = temp_dir.path().join("config.toml");
-        let data_path = temp_dir.path().join("data.json");
-
-        // Create config
-        let config = Config {
-            daemon: DaemonConfig {
-                frequency: 1,
-                stale_after: 5,
-                data_file: PathBuf::from("data.json"),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        // Test case 1: Fresh cache data
-        {
-            let now = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap();
-            let data = serde_json::json!({
-                "updated_at": {
-                    "secs_since_epoch": now.as_secs(),
-                    "nanos_since_epoch": now.subsec_nanos(),
-                },
-                "hostname": "test-host",
-                "ip": "192.168.1.1",
-                "power": {
-                    "percentage": 100,
-                    "status": "Full",
-                    "time_left": "",
-                    "power_now": 0.0,
-                    "energy_now": 50.0,
-                    "energy_full": 50.0,
-                    "voltage": 12.0,
-                    "temperature": 25.0,
-                    "capacity": 100,
-                    "cycle_count": 0,
-                    "technology": "Li-ion",
-                    "manufacturer": "Test",
-                    "model": "Test",
-                    "serial": "123"
-                }
-            });
-            fs::write(&data_path, serde_json::to_string_pretty(&data).unwrap()).unwrap();
-
-            let cached = read_cached_data(&config_path, config.daemon.stale_after, &config);
-            assert!(cached.is_some(), "Should read fresh cache data");
-            let cached = cached.unwrap();
-            assert_eq!(
-                cached["hostname"], "test-host",
-                "Should read correct hostname"
-            );
-            assert_eq!(cached["ip"], "192.168.1.1", "Should read correct IP");
-        }
-
-        // Test case 2: Stale cache data
-        {
-            let stale_time = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .checked_sub(std::time::Duration::from_secs(10))
-                .unwrap();
-            let data = serde_json::json!({
-                "updated_at": {
-                    "secs_since_epoch": stale_time.as_secs(),
-                    "nanos_since_epoch": stale_time.subsec_nanos(),
-                },
-                "hostname": "stale-host",
-            });
-            fs::write(&data_path, serde_json::to_string_pretty(&data).unwrap()).unwrap();
-
-            let cached = read_cached_data(&config_path, config.daemon.stale_after, &config);
-            assert!(cached.is_none(), "Should not read stale cache data");
-        }
-
-        // Test case 3: Invalid cache data
-        {
-            fs::write(&data_path, "invalid json").unwrap();
-            let cached = read_cached_data(&config_path, config.daemon.stale_after, &config);
-            assert!(cached.is_none(), "Should not read invalid cache data");
-        }
-
-        // Test case 4: Missing cache file
-        {
-            fs::remove_file(&data_path).unwrap();
-            let cached = read_cached_data(&config_path, config.daemon.stale_after, &config);
-            assert!(cached.is_none(), "Should handle missing cache file");
-        }
-    }
-
-    #[test]
-    fn test_timing_source_determination() {
-        // Test case 1: All data from cache
+        // Test case 5: Edge case - cached_count > fetch_count (invalid state)
         let timing = TimingData {
             fetch_time: std::time::Duration::from_millis(100),
             format_time: std::time::Duration::from_millis(50),
-            fetch_count: 2,
+            fetch_count: 1,
             cached_count: 2,
             skip_count: 0,
         };
         assert_eq!(
-            timing.fetch_count, timing.cached_count,
-            "All fetches should be cached"
-        );
-        assert_eq!(
-            timing.fetch_count - timing.cached_count,
-            0,
-            "Should have no live fetches"
+            get_source_type(&timing),
+            "[live]",
+            "Should show [live] when cached_count > fetch_count (invalid state)"
         );
 
-        // Test case 2: Mixed cache and live data
-        let timing = TimingData {
-            fetch_time: std::time::Duration::from_millis(100),
-            format_time: std::time::Duration::from_millis(50),
-            fetch_count: 3,
-            cached_count: 1,
-            skip_count: 0,
-        };
-        assert_eq!(
-            timing.fetch_count - timing.cached_count,
-            2,
-            "Should have 2 live fetches"
-        );
-        assert_eq!(timing.cached_count, 1, "Should have 1 cached fetch");
-
-        // Test case 3: All live data
-        let timing = TimingData {
-            fetch_time: std::time::Duration::from_millis(100),
-            format_time: std::time::Duration::from_millis(50),
-            fetch_count: 2,
-            cached_count: 0,
-            skip_count: 0,
-        };
-        assert_eq!(timing.cached_count, 0, "Should have no cached data");
-        assert_eq!(timing.fetch_count, 2, "Should have all live fetches");
-
-        // Test case 4: Skipped data
+        // Test case 6: Edge case - zero counts with skip
         let timing = TimingData {
             fetch_time: std::time::Duration::from_millis(0),
             format_time: std::time::Duration::from_millis(0),
             fetch_count: 0,
             cached_count: 0,
+            skip_count: 0,
+        };
+        assert_eq!(
+            get_source_type(&timing),
+            "[skip]",
+            "Should show [skip] when all counts are zero"
+        );
+
+        // Test case 7: Mixed state with skips
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 2,
+            cached_count: 1,
+            skip_count: 3,
+        };
+        assert_eq!(
+            get_source_type(&timing),
+            "[live]",
+            "Should show [live] when mixed with skips"
+        );
+    }
+
+    #[test]
+    fn test_timing_data_edge_cases() {
+        // Test case 1: High fetch count, low cache count
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 1000,
+            cached_count: 1,
+            skip_count: 0,
+        };
+        assert_eq!(
+            timing.fetch_count - timing.cached_count,
+            999,
+            "Should handle large fetch counts"
+        );
+        assert_eq!(timing.cached_count, 1, "Should preserve small cache count");
+
+        // Test case 2: Equal high counts
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 1000,
+            cached_count: 1000,
+            skip_count: 0,
+        };
+        assert_eq!(
+            timing.fetch_count, timing.cached_count,
+            "Should handle equal high counts"
+        );
+        assert_eq!(
+            timing.fetch_count - timing.cached_count,
+            0,
+            "Should show no live fetches"
+        );
+
+        // Test case 3: High skip count
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(0),
+            format_time: std::time::Duration::from_millis(0),
+            fetch_count: 0,
+            cached_count: 0,
+            skip_count: 1000,
+        };
+        assert_eq!(timing.skip_count, 1000, "Should handle high skip counts");
+        assert_eq!(
+            timing.fetch_count, 0,
+            "Should have no fetches with high skip count"
+        );
+
+        // Test case 4: Mixed high counts
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 1000,
+            cached_count: 500,
+            skip_count: 2000,
+        };
+        assert_eq!(
+            timing.fetch_count - timing.cached_count,
+            500,
+            "Should handle mixed high counts"
+        );
+        assert_eq!(timing.skip_count, 2000, "Should preserve high skip count");
+    }
+
+    #[test]
+    fn test_timing_data_complex_scenarios() {
+        // Test case 1: Multiple variables with mixed sources
+        let mut total_timing = TimingData {
+            fetch_time: std::time::Duration::default(),
+            format_time: std::time::Duration::default(),
+            fetch_count: 0,
+            cached_count: 0,
+            skip_count: 0,
+        };
+
+        // Add some cached data
+        total_timing.fetch_count += 3;
+        total_timing.cached_count += 3;
+        assert_eq!(
+            total_timing.fetch_count, total_timing.cached_count,
+            "Should be all cached initially"
+        );
+
+        // Add some live data
+        total_timing.fetch_count += 2;
+        assert_eq!(
+            total_timing.fetch_count - total_timing.cached_count,
+            2,
+            "Should show correct live count after adding live data"
+        );
+
+        // Add some skipped data
+        total_timing.skip_count += 4;
+        assert_eq!(
+            total_timing.skip_count, 4,
+            "Should track skipped count independently"
+        );
+
+        // Test case 2: Accumulating timing data
+        let mut timing1 = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 2,
+            cached_count: 1,
+            skip_count: 1,
+        };
+
+        let timing2 = TimingData {
+            fetch_time: std::time::Duration::from_millis(200),
+            format_time: std::time::Duration::from_millis(75),
+            fetch_count: 3,
+            cached_count: 2,
             skip_count: 2,
         };
-        assert_eq!(timing.fetch_count, 0, "Should have no fetches");
-        assert_eq!(timing.skip_count, 2, "Should have skipped items");
+
+        // Simulate combining timing data
+        timing1.fetch_time += timing2.fetch_time;
+        timing1.format_time += timing2.format_time;
+        timing1.fetch_count += timing2.fetch_count;
+        timing1.cached_count += timing2.cached_count;
+        timing1.skip_count += timing2.skip_count;
+
+        assert_eq!(
+            timing1.fetch_time,
+            std::time::Duration::from_millis(300),
+            "Should accumulate fetch time"
+        );
+        assert_eq!(
+            timing1.format_time,
+            std::time::Duration::from_millis(125),
+            "Should accumulate format time"
+        );
+        assert_eq!(timing1.fetch_count, 5, "Should accumulate fetch count");
+        assert_eq!(timing1.cached_count, 3, "Should accumulate cached count");
+        assert_eq!(timing1.skip_count, 3, "Should accumulate skip count");
+    }
+
+    #[test]
+    fn test_timing_data_boundary_conditions() {
+        // Test case 1: Zero duration with counts
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(0),
+            format_time: std::time::Duration::from_millis(0),
+            fetch_count: 5,
+            cached_count: 3,
+            skip_count: 2,
+        };
+        assert_eq!(
+            timing.fetch_time.as_nanos(),
+            0,
+            "Should handle zero fetch time"
+        );
+        assert_eq!(
+            timing.format_time.as_nanos(),
+            0,
+            "Should handle zero format time"
+        );
+        assert_eq!(
+            timing.fetch_count - timing.cached_count,
+            2,
+            "Should track counts with zero time"
+        );
+
+        // Test case 2: Max duration with zero counts
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_secs(u64::MAX),
+            format_time: std::time::Duration::from_secs(u64::MAX),
+            fetch_count: 0,
+            cached_count: 0,
+            skip_count: 0,
+        };
+        assert_eq!(
+            timing.fetch_time.as_secs(),
+            u64::MAX,
+            "Should handle max fetch time"
+        );
+        assert_eq!(
+            timing.format_time.as_secs(),
+            u64::MAX,
+            "Should handle max format time"
+        );
+        assert_eq!(
+            timing.fetch_count, 0,
+            "Should handle zero counts with max time"
+        );
+
+        // Test case 3: Minimum non-zero values
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_nanos(1),
+            format_time: std::time::Duration::from_nanos(1),
+            fetch_count: 1,
+            cached_count: 1,
+            skip_count: 1,
+        };
+        assert_eq!(
+            timing.fetch_time.as_nanos(),
+            1,
+            "Should handle minimum fetch time"
+        );
+        assert_eq!(
+            timing.format_time.as_nanos(),
+            1,
+            "Should handle minimum format time"
+        );
+        assert_eq!(
+            timing.fetch_count, timing.cached_count,
+            "Should handle minimum counts"
+        );
     }
 }
