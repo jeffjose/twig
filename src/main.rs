@@ -364,6 +364,10 @@ struct TimingData {
     skip_count: usize,
     cached_count: usize,
     deferred_count: usize,
+    cached_time: std::time::Duration,
+    live_time: std::time::Duration,
+    skip_time: std::time::Duration,
+    deferred_time: std::time::Duration,
 }
 
 // Add this at the top level
@@ -533,6 +537,25 @@ fn is_section_requested(section_name: &str, config_path: &PathBuf, config: &Conf
     }
 }
 
+fn format_duration(duration: std::time::Duration) -> String {
+    let nanos = duration.as_nanos();
+    if nanos == 0 {
+        return "0ns".to_string();
+    }
+    if nanos < 1000 {
+        return format!("{}ns", nanos);
+    }
+    let micros = duration.as_micros();
+    if micros < 1000 {
+        return format!("{}µs", micros);
+    }
+    let millis = duration.as_millis();
+    if millis < 1000 {
+        return format!("{}ms", millis);
+    }
+    format!("{:.1}s", duration.as_secs_f64())
+}
+
 #[tokio::main]
 async fn main() {
     let start = Instant::now();
@@ -612,6 +635,10 @@ async fn main() {
                 skip_count: 0,
                 cached_count: 0,
                 deferred_count: 0,
+                cached_time: std::time::Duration::default(),
+                live_time: std::time::Duration::default(),
+                skip_time: std::time::Duration::default(),
+                deferred_time: std::time::Duration::default(),
             };
 
             let format_start = Instant::now();
@@ -619,16 +646,30 @@ async fn main() {
             for (i, time_config) in state_clone.config.time.iter().enumerate() {
                 let var_name = get_var_name(time_config, "time", i);
                 if format_uses_variable(&state_clone.prompt_format, &var_name) {
-                    if time_config.deferred && !is_section_requested(&var_name, &state_clone.config_path, &state_clone.config) {
+                    if time_config.deferred
+                        && !is_section_requested(
+                            &var_name,
+                            &state_clone.config_path,
+                            &state_clone.config,
+                        )
+                    {
+                        let start = Instant::now();
                         time_vars.push((var_name, String::new()));
                         timing.skip_count += 1;
                         timing.deferred_count += 1;
+                        timing.deferred_time += start.elapsed();
                         continue;
                     }
                     let fetch_start = Instant::now();
                     match format_current_time(&time_config.format) {
                         Ok(time) => {
-                            timing.fetch_time += fetch_start.elapsed();
+                            let elapsed = fetch_start.elapsed();
+                            timing.fetch_time += elapsed;
+                            if timing.cached_count > 0 {
+                                timing.cached_time += elapsed;
+                            } else {
+                                timing.live_time += elapsed;
+                            }
                             timing.fetch_count += 1;
                             time_vars.push((var_name, time));
                         }
@@ -639,7 +680,9 @@ async fn main() {
                         }
                     }
                 } else {
+                    let start = Instant::now();
                     timing.skip_count += 1;
+                    timing.skip_time += start.elapsed();
                 }
             }
             timing.format_time = format_start.elapsed();
@@ -658,6 +701,10 @@ async fn main() {
                 skip_count: 0,
                 cached_count: 0,
                 deferred_count: 0,
+                cached_time: std::time::Duration::default(),
+                live_time: std::time::Duration::default(),
+                skip_time: std::time::Duration::default(),
+                deferred_time: std::time::Duration::default(),
             };
 
             let format_start = Instant::now();
@@ -670,14 +717,18 @@ async fn main() {
             ) {
                 if let Some(hostname) = cached.get("hostname") {
                     if let Some(hostname_str) = hostname.as_str() {
+                        let fetch_start = Instant::now();
+                        let result = Ok(hostname_str.to_string());
+                        timing.cached_time += fetch_start.elapsed();
                         timing.cached_count = 1;
                         timing.fetch_count = 1;
-                        Ok(hostname_str.to_string())
+                        result
                     } else {
                         // Fall back to live data if cached data is invalid
                         let fetch_start = Instant::now();
                         let result = hostname::get_hostname(&hostname::Config::default());
                         timing.fetch_time = fetch_start.elapsed();
+                        timing.live_time += fetch_start.elapsed();
                         timing.fetch_count = 1;
                         result
                     }
@@ -686,6 +737,7 @@ async fn main() {
                     let fetch_start = Instant::now();
                     let result = hostname::get_hostname(&hostname::Config::default());
                     timing.fetch_time = fetch_start.elapsed();
+                    timing.live_time += fetch_start.elapsed();
                     timing.fetch_count = 1;
                     result
                 }
@@ -694,6 +746,7 @@ async fn main() {
                 let fetch_start = Instant::now();
                 let result = hostname::get_hostname(&hostname::Config::default());
                 timing.fetch_time = fetch_start.elapsed();
+                timing.live_time += fetch_start.elapsed();
                 timing.fetch_count = 1;
                 result
             };
@@ -701,7 +754,13 @@ async fn main() {
             for (i, hostname_config) in state_clone.config.hostname.iter().enumerate() {
                 let var_name = get_var_name(hostname_config, "hostname", i);
                 if format_uses_variable(&state_clone.prompt_format, &var_name) {
-                    if hostname_config.deferred && !is_section_requested(&var_name, &state_clone.config_path, &state_clone.config) {
+                    if hostname_config.deferred
+                        && !is_section_requested(
+                            &var_name,
+                            &state_clone.config_path,
+                            &state_clone.config,
+                        )
+                    {
                         hostname_vars.push((var_name, String::new()));
                         timing.skip_count += 1;
                         timing.deferred_count += 1;
@@ -737,6 +796,10 @@ async fn main() {
                 skip_count: 0,
                 cached_count: 0,
                 deferred_count: 0,
+                cached_time: std::time::Duration::default(),
+                live_time: std::time::Duration::default(),
+                skip_time: std::time::Duration::default(),
+                deferred_time: std::time::Duration::default(),
             };
 
             let format_start = Instant::now();
@@ -749,32 +812,39 @@ async fn main() {
             ) {
                 if let Some(ip) = cached.get("ip") {
                     if let Some(ip_str) = ip.as_str() {
+                        let fetch_start = Instant::now();
+                        let result = Ok(ip_str.to_string());
+                        timing.cached_time += fetch_start.elapsed();
                         timing.cached_count = 1;
                         timing.fetch_count = 1;
-                        Ok(ip_str.to_string())
+                        result
                     } else {
                         // Fall back to live data if cached data is invalid
                         let fetch_start = Instant::now();
-                        let result = match &state_clone.config.ip.iter().find(|c| c.interface.is_some()) {
-                            Some(config) => ip::get_ip(config).map(|ip| ip.to_string()),
-                            None => local_ip_address::local_ip()
-                                .map(|ip| ip.to_string())
-                                .map_err(|e| ip::IpConfigError::Lookup(e.to_string())),
-                        };
+                        let result =
+                            match &state_clone.config.ip.iter().find(|c| c.interface.is_some()) {
+                                Some(config) => ip::get_ip(config).map(|ip| ip.to_string()),
+                                None => local_ip_address::local_ip()
+                                    .map(|ip| ip.to_string())
+                                    .map_err(|e| ip::IpConfigError::Lookup(e.to_string())),
+                            };
                         timing.fetch_time = fetch_start.elapsed();
+                        timing.live_time += fetch_start.elapsed();
                         timing.fetch_count = 1;
                         result
                     }
                 } else {
                     // Fall back to live data if ip not in cache
                     let fetch_start = Instant::now();
-                    let result = match &state_clone.config.ip.iter().find(|c| c.interface.is_some()) {
+                    let result = match &state_clone.config.ip.iter().find(|c| c.interface.is_some())
+                    {
                         Some(config) => ip::get_ip(config).map(|ip| ip.to_string()),
                         None => local_ip_address::local_ip()
                             .map(|ip| ip.to_string())
                             .map_err(|e| ip::IpConfigError::Lookup(e.to_string())),
                     };
                     timing.fetch_time = fetch_start.elapsed();
+                    timing.live_time += fetch_start.elapsed();
                     timing.fetch_count = 1;
                     result
                 }
@@ -788,6 +858,7 @@ async fn main() {
                         .map_err(|e| ip::IpConfigError::Lookup(e.to_string())),
                 };
                 timing.fetch_time = fetch_start.elapsed();
+                timing.live_time += fetch_start.elapsed();
                 timing.fetch_count = 1;
                 result
             };
@@ -795,7 +866,13 @@ async fn main() {
             for (i, ip_config) in state_clone.config.ip.iter().enumerate() {
                 let var_name = get_var_name(ip_config, "ip", i);
                 if format_uses_variable(&state_clone.prompt_format, &var_name) {
-                    if ip_config.deferred && !is_section_requested(&var_name, &state_clone.config_path, &state_clone.config) {
+                    if ip_config.deferred
+                        && !is_section_requested(
+                            &var_name,
+                            &state_clone.config_path,
+                            &state_clone.config,
+                        )
+                    {
                         ip_vars.push((var_name, String::new()));
                         timing.skip_count += 1;
                         timing.deferred_count += 1;
@@ -831,6 +908,10 @@ async fn main() {
                 skip_count: 0,
                 cached_count: 0,
                 deferred_count: 0,
+                cached_time: std::time::Duration::default(),
+                live_time: std::time::Duration::default(),
+                skip_time: std::time::Duration::default(),
+                deferred_time: std::time::Duration::default(),
             };
 
             let format_start = Instant::now();
@@ -838,7 +919,13 @@ async fn main() {
             for (i, cwd_config) in state_clone.config.cwd.iter().enumerate() {
                 let var_name = get_var_name(cwd_config, "cwd", i);
                 if format_uses_variable(&state_clone.prompt_format, &var_name) {
-                    if cwd_config.deferred && !is_section_requested(&var_name, &state_clone.config_path, &state_clone.config) {
+                    if cwd_config.deferred
+                        && !is_section_requested(
+                            &var_name,
+                            &state_clone.config_path,
+                            &state_clone.config,
+                        )
+                    {
                         cwd_vars.push((var_name, String::new()));
                         timing.skip_count += 1;
                         timing.deferred_count += 1;
@@ -877,6 +964,10 @@ async fn main() {
                 skip_count: 0,
                 cached_count: 0,
                 deferred_count: 0,
+                cached_time: std::time::Duration::default(),
+                live_time: std::time::Duration::default(),
+                skip_time: std::time::Duration::default(),
+                deferred_time: std::time::Duration::default(),
             };
 
             let mut power_vars = Vec::new();
@@ -888,26 +979,30 @@ async fn main() {
                 &state_clone.config,
             ) {
                 if let Some(power) = cached.get("power") {
-                    match serde_json::from_value(power.clone()) {
+                    let fetch_start = Instant::now();
+                    let result = match serde_json::from_value(power.clone()) {
                         Ok(info) => {
+                            timing.cached_time += fetch_start.elapsed();
                             timing.cached_count = 1;
                             timing.fetch_count = 1;
                             Ok(info)
                         }
                         Err(_) => {
                             // Fall back to live data if cached data is invalid
-                            let fetch_start = Instant::now();
                             let result = power::get_battery_info_internal();
                             timing.fetch_time = fetch_start.elapsed();
+                            timing.live_time += fetch_start.elapsed();
                             timing.fetch_count = 1;
                             result
                         }
-                    }
+                    };
+                    result
                 } else {
                     // Fall back to live data if power not in cache
                     let fetch_start = Instant::now();
                     let result = power::get_battery_info_internal();
                     timing.fetch_time = fetch_start.elapsed();
+                    timing.live_time += fetch_start.elapsed();
                     timing.fetch_count = 1;
                     result
                 }
@@ -916,6 +1011,7 @@ async fn main() {
                 let fetch_start = Instant::now();
                 let result = power::get_battery_info_internal();
                 timing.fetch_time = fetch_start.elapsed();
+                timing.live_time += fetch_start.elapsed();
                 timing.fetch_count = 1;
                 result
             };
@@ -924,7 +1020,13 @@ async fn main() {
                 for (i, power_config) in state_clone.config.power.iter().enumerate() {
                     let var_name = get_var_name(power_config, "power", i);
                     if format_uses_variable(&state_clone.prompt_format, &var_name) {
-                        if power_config.deferred && !is_section_requested(&var_name, &state_clone.config_path, &state_clone.config) {
+                        if power_config.deferred
+                            && !is_section_requested(
+                                &var_name,
+                                &state_clone.config_path,
+                                &state_clone.config,
+                            )
+                        {
                             power_vars.push((var_name, String::new()));
                             timing.skip_count += 1;
                             timing.deferred_count += 1;
@@ -953,6 +1055,10 @@ async fn main() {
                 skip_count: 0,
                 cached_count: 0,
                 deferred_count: 0,
+                cached_time: std::time::Duration::default(),
+                live_time: std::time::Duration::default(),
+                skip_time: std::time::Duration::default(),
+                deferred_time: std::time::Duration::default(),
             };
 
             let format_start = Instant::now();
@@ -1031,6 +1137,10 @@ async fn main() {
             let mut total_live = 0;
             let mut total_skipped = 0;
             let mut total_deferred = 0;
+            let mut total_cached_time = std::time::Duration::default();
+            let mut total_live_time = std::time::Duration::default();
+            let mut total_skip_time = std::time::Duration::default();
+            let mut total_deferred_time = std::time::Duration::default();
             let total_errors = 0;
 
             // Update totals
@@ -1039,6 +1149,10 @@ async fn main() {
                 total_live += timing_data.fetch_count - timing_data.cached_count;
                 total_skipped += timing_data.skip_count;
                 total_deferred += timing_data.deferred_count;
+                total_cached_time += timing_data.cached_time;
+                total_live_time += timing_data.live_time;
+                total_skip_time += timing_data.skip_time;
+                total_deferred_time += timing_data.deferred_time;
             }
 
             // Check daemon status
@@ -1086,8 +1200,14 @@ async fn main() {
                 total_live += timing_data.fetch_count - timing_data.cached_count;
                 total_skipped += timing_data.skip_count;
                 total_deferred += timing_data.deferred_count;
+                total_cached_time += timing_data.cached_time;
+                total_live_time += timing_data.live_time;
+                total_skip_time += timing_data.skip_time;
+                total_deferred_time += timing_data.deferred_time;
 
-                let source_type = if timing_data.cached_count > 0 && timing_data.fetch_count == timing_data.cached_count {
+                let source_type = if timing_data.cached_count > 0
+                    && timing_data.fetch_count == timing_data.cached_count
+                {
                     "[cache]"
                 } else if timing_data.fetch_count > 0 {
                     "[live]"
@@ -1100,7 +1220,10 @@ async fn main() {
                     stats.push(format!("cached:{}", timing_data.cached_count));
                 }
                 if timing_data.fetch_count - timing_data.cached_count > 0 {
-                    stats.push(format!("live:{}", timing_data.fetch_count - timing_data.cached_count));
+                    stats.push(format!(
+                        "live:{}",
+                        timing_data.fetch_count - timing_data.cached_count
+                    ));
                 }
                 if timing_data.skip_count > 0 {
                     stats.push(format!("skip:{}", timing_data.skip_count));
@@ -1112,7 +1235,8 @@ async fn main() {
                 if timing_data.fetch_count > 0 || timing_data.cached_count > 0 {
                     eprintln!("├─ {} {} ({:.1}%)", source_type, name, percent);
                     eprintln!("│  ├─ items: {}", stats.join(", "));
-                    eprintln!("│  └─ time: fetch={:.1}ms ({:.1}%), proc={:.1}ms ({:.1}%), total={:.1}ms",
+                    eprintln!(
+                        "│  └─ time: fetch={:.1}ms ({:.1}%), proc={:.1}ms ({:.1}%), total={:.1}ms",
                         timing_data.fetch_time.as_secs_f64() * 1000.0,
                         (timing_data.fetch_time.as_nanos() as f64 / total_nanos * 100.0),
                         timing_data.format_time.as_secs_f64() * 1000.0,
@@ -1124,18 +1248,28 @@ async fn main() {
 
             // Print summary
             eprintln!("└─ summary");
-            eprintln!("   ├─ items: {} cached, {} live, {} skipped, {} deferred{}",
-                total_cached, total_live, total_skipped, total_deferred,
-                if total_errors > 0 { format!(", {} errors", total_errors) } else { "".to_string() }
+            eprintln!(
+                "   ├─ items: {} cached ({}), {} live ({}), {} skipped ({}), {} deferred ({}){}",
+                total_cached,
+                format_duration(total_cached_time),
+                total_live,
+                format_duration(total_live_time),
+                total_skipped,
+                format_duration(total_skip_time),
+                total_deferred,
+                format_duration(total_deferred_time),
+                if total_errors > 0 {
+                    format!(", {} errors", total_errors)
+                } else {
+                    "".to_string()
+                }
             );
-            eprintln!("   └─ time: cfg={:.1}ms ({:.1}%), data={:.1}ms ({:.1}%), tmpl={:.1}ms ({:.1}%), total={:.1}ms",
-                config_duration.as_secs_f64() * 1000.0,
-                (config_duration.as_nanos() as f64 / total_nanos * 100.0),
-                vars_duration.as_secs_f64() * 1000.0,
-                (vars_duration.as_nanos() as f64 / total_nanos * 100.0),
-                template_start.elapsed().as_secs_f64() * 1000.0,
-                (template_start.elapsed().as_nanos() as f64 / total_nanos * 100.0),
-                total_duration.as_secs_f64() * 1000.0
+            eprintln!(
+                "   └─ time: cfg={}, data={}, tmpl={}, total={}",
+                format_duration(config_duration),
+                format_duration(vars_duration),
+                format_duration(template_start.elapsed()),
+                format_duration(total_duration)
             );
         }
 
@@ -1159,6 +1293,36 @@ async fn run_daemon(cli: &Cli) -> Result<(), DaemonError> {
         get_config_path(&cli.config).map_err(|e| DaemonError::ConfigError(e.to_string()))?;
     let config =
         Arc::new(load_config(&config_path).map_err(|e| DaemonError::ConfigError(e.to_string()))?);
+
+    // Count deferred sections on startup
+    let mut deferred_count = 0;
+    for time_config in &config.time {
+        if time_config.deferred {
+            deferred_count += 1;
+        }
+    }
+    for hostname_config in &config.hostname {
+        if hostname_config.deferred {
+            deferred_count += 1;
+        }
+    }
+    for ip_config in &config.ip {
+        if ip_config.deferred {
+            deferred_count += 1;
+        }
+    }
+    for cwd_config in &config.cwd {
+        if cwd_config.deferred {
+            deferred_count += 1;
+        }
+    }
+    for power_config in &config.power {
+        if power_config.deferred {
+            deferred_count += 1;
+        }
+    }
+
+    println!("Found {} deferred sections", deferred_count);
 
     // Create lock in config directory
     let config_dir = config_path.parent().ok_or_else(|| {
@@ -1273,11 +1437,12 @@ async fn run_daemon(cli: &Cli) -> Result<(), DaemonError> {
 
                         let update_duration = update_start.elapsed();
                         println!(
-                            "[{}] Updated {} blocks ({} failed) in {:.2}ms",
+                            "[{}] Updated {} blocks ({} failed) in {:.2}ms ({} deferred sections)",
                             chrono::Local::now().format("%H:%M:%S"),
                             blocks_processed,
                             blocks_failed,
-                            update_duration.as_secs_f64() * 1000.0
+                            update_duration.as_secs_f64() * 1000.0,
+                            deferred_count
                         );
                     }
                     _ = shutdown_rx.recv() => {
@@ -1399,6 +1564,10 @@ mod tests {
                 skip_count: 0,
                 cached_count: 0,
                 deferred_count: 0,
+                cached_time: std::time::Duration::default(),
+                live_time: std::time::Duration::default(),
+                skip_time: std::time::Duration::default(),
+                deferred_time: std::time::Duration::default(),
             };
 
             let format_start = Instant::now();
@@ -1408,7 +1577,13 @@ mod tests {
                     let fetch_start = Instant::now();
                     match format_current_time(&time_config.format) {
                         Ok(time) => {
-                            timing.fetch_time += fetch_start.elapsed();
+                            let elapsed = fetch_start.elapsed();
+                            timing.fetch_time += elapsed;
+                            if timing.cached_count > 0 {
+                                timing.cached_time += elapsed;
+                            } else {
+                                timing.live_time += elapsed;
+                            }
                             timing.fetch_count += 1;
                             time_vars.push((var_name, time));
                         }
@@ -1419,7 +1594,9 @@ mod tests {
                         }
                     }
                 } else {
+                    let start = Instant::now();
                     timing.skip_count += 1;
+                    timing.skip_time += start.elapsed();
                 }
             }
             timing.format_time = format_start.elapsed();
@@ -1483,6 +1660,10 @@ mod tests {
             skip_count: 1,
             cached_count: 1,
             deferred_count: 0,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::default(),
+            deferred_time: std::time::Duration::default(),
         };
 
         assert_eq!(timing.fetch_count - timing.cached_count, 1); // Live fetches
@@ -1499,6 +1680,10 @@ mod tests {
             skip_count: 1,
             cached_count: 1,
             deferred_count: 3,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::default(),
+            deferred_time: std::time::Duration::default(),
         };
 
         assert_eq!(timing.deferred_count, 3, "Should track deferred count");
@@ -1513,6 +1698,10 @@ mod tests {
             skip_count: 1,
             cached_count: 1,
             deferred_count: 2,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::default(),
+            deferred_time: std::time::Duration::default(),
         };
 
         let timing2 = TimingData {
@@ -1522,6 +1711,10 @@ mod tests {
             skip_count: 2,
             cached_count: 2,
             deferred_count: 3,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::default(),
+            deferred_time: std::time::Duration::default(),
         };
 
         // Simulate combining timing data
@@ -1548,6 +1741,10 @@ mod tests {
             cached_count: 1,
             skip_count: 0,
             deferred_count: 0,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::default(),
+            deferred_time: std::time::Duration::default(),
         };
         assert_eq!(
             timing.fetch_count - timing.cached_count,
@@ -1564,6 +1761,10 @@ mod tests {
             cached_count: 1000,
             skip_count: 0,
             deferred_count: 0,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::default(),
+            deferred_time: std::time::Duration::default(),
         };
         assert_eq!(
             timing.fetch_count, timing.cached_count,
@@ -1583,6 +1784,10 @@ mod tests {
             cached_count: 0,
             skip_count: 1000,
             deferred_count: 0,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::from_secs(1000),
+            deferred_time: std::time::Duration::default(),
         };
         assert_eq!(timing.skip_count, 1000, "Should handle high skip counts");
         assert_eq!(
@@ -1598,6 +1803,10 @@ mod tests {
             cached_count: 500,
             skip_count: 2000,
             deferred_count: 0,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::from_secs(2000),
+            deferred_time: std::time::Duration::default(),
         };
         assert_eq!(
             timing.fetch_count - timing.cached_count,
@@ -1617,6 +1826,10 @@ mod tests {
             cached_count: 0,
             skip_count: 0,
             deferred_count: 0,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::default(),
+            deferred_time: std::time::Duration::default(),
         };
 
         // Add some cached data
@@ -1650,6 +1863,10 @@ mod tests {
             cached_count: 1,
             skip_count: 1,
             deferred_count: 0,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::default(),
+            deferred_time: std::time::Duration::default(),
         };
 
         let timing2 = TimingData {
@@ -1659,6 +1876,10 @@ mod tests {
             cached_count: 2,
             skip_count: 2,
             deferred_count: 0,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::default(),
+            deferred_time: std::time::Duration::default(),
         };
 
         // Simulate combining timing data
@@ -1694,6 +1915,10 @@ mod tests {
             cached_count: 3,
             skip_count: 2,
             deferred_count: 0,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::default(),
+            deferred_time: std::time::Duration::default(),
         };
         assert_eq!(
             timing.fetch_time.as_nanos(),
@@ -1719,6 +1944,10 @@ mod tests {
             cached_count: 0,
             skip_count: 0,
             deferred_count: 0,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::default(),
+            deferred_time: std::time::Duration::default(),
         };
         assert_eq!(
             timing.fetch_time.as_secs(),
@@ -1743,6 +1972,10 @@ mod tests {
             cached_count: 1,
             skip_count: 1,
             deferred_count: 0,
+            cached_time: std::time::Duration::default(),
+            live_time: std::time::Duration::default(),
+            skip_time: std::time::Duration::default(),
+            deferred_time: std::time::Duration::default(),
         };
         assert_eq!(
             timing.fetch_time.as_nanos(),
