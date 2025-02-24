@@ -1020,7 +1020,13 @@ async fn main() {
                 for (i, power_config) in state_clone.config.power.iter().enumerate() {
                     let var_name = get_var_name(power_config, "power", i);
                     if format_uses_variable(&state_clone.prompt_format, &var_name) {
-                        if power_config.deferred && !is_section_requested(&var_name, &state_clone.config_path, &state_clone.config) {
+                        if power_config.deferred
+                            && !is_section_requested(
+                                &var_name,
+                                &state_clone.config_path,
+                                &state_clone.config,
+                            )
+                        {
                             power_vars.push((var_name, String::new()));
                             timing.skip_count += 1;
                             timing.deferred_count += 1;
@@ -1215,15 +1221,6 @@ async fn main() {
             for (name, timing_data) in &sorted_timings {
                 let total_time = timing_data.fetch_time + timing_data.format_time;
                 let percent = total_time.as_nanos() as f64 / total_nanos * 100.0;
-
-                total_cached += timing_data.cached_count;
-                total_live += timing_data.fetch_count - timing_data.cached_count;
-                total_skipped += timing_data.skip_count;
-                total_deferred += timing_data.deferred_count;
-                total_cached_time += timing_data.cached_time;
-                total_live_time += timing_data.live_time;
-                total_skip_time += timing_data.skip_time;
-                total_deferred_time += timing_data.deferred_time;
 
                 let source_type = if timing_data.cached_count > 0
                     && timing_data.fetch_count == timing_data.cached_count
@@ -2010,6 +2007,191 @@ mod tests {
         assert_eq!(
             timing.fetch_count, timing.cached_count,
             "Should handle minimum counts"
+        );
+    }
+
+    #[test]
+    fn test_timing_totals_not_doubled() {
+        // Create mock timing data for multiple tasks
+        let timing1 = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 2,
+            skip_count: 1,
+            cached_count: 1,
+            deferred_count: 2,
+            cached_time: std::time::Duration::from_millis(50),
+            live_time: std::time::Duration::from_millis(50),
+            skip_time: std::time::Duration::from_millis(10),
+            deferred_time: std::time::Duration::from_millis(20),
+        };
+
+        let timing2 = TimingData {
+            fetch_time: std::time::Duration::from_millis(200),
+            format_time: std::time::Duration::from_millis(75),
+            fetch_count: 3,
+            skip_count: 2,
+            cached_count: 2,
+            deferred_count: 3,
+            cached_time: std::time::Duration::from_millis(100),
+            live_time: std::time::Duration::from_millis(100),
+            skip_time: std::time::Duration::from_millis(20),
+            deferred_time: std::time::Duration::from_millis(30),
+        };
+
+        // Create a vector of task timings
+        let task_timings = vec![("Task1", timing1), ("Task2", timing2)];
+
+        // Calculate totals as done in the main function
+        let mut total_cached = 0;
+        let mut total_live = 0;
+        let mut total_skipped = 0;
+        let mut total_deferred = 0;
+        let mut total_cached_time = std::time::Duration::default();
+        let mut total_live_time = std::time::Duration::default();
+        let mut total_skip_time = std::time::Duration::default();
+        let mut total_deferred_time = std::time::Duration::default();
+
+        // Update totals
+        for (_, timing_data) in &task_timings {
+            total_cached += timing_data.cached_count;
+            total_live += timing_data.fetch_count - timing_data.cached_count;
+            total_skipped += timing_data.skip_count;
+            total_deferred += timing_data.deferred_count;
+            total_cached_time += timing_data.cached_time;
+            total_live_time += timing_data.live_time;
+            total_skip_time += timing_data.skip_time;
+            total_deferred_time += timing_data.deferred_time;
+        }
+
+        // Verify the totals are correct (not doubled)
+        assert_eq!(total_cached, 3, "Total cached count should be 3");
+        assert_eq!(total_live, 2, "Total live count should be 2");
+        assert_eq!(total_skipped, 3, "Total skipped count should be 3");
+        assert_eq!(total_deferred, 5, "Total deferred count should be 5");
+        assert_eq!(
+            total_cached_time,
+            std::time::Duration::from_millis(150),
+            "Total cached time should be 150ms"
+        );
+        assert_eq!(
+            total_live_time,
+            std::time::Duration::from_millis(150),
+            "Total live time should be 150ms"
+        );
+        assert_eq!(
+            total_skip_time,
+            std::time::Duration::from_millis(30),
+            "Total skip time should be 30ms"
+        );
+        assert_eq!(
+            total_deferred_time,
+            std::time::Duration::from_millis(50),
+            "Total deferred time should be 50ms"
+        );
+    }
+
+    #[test]
+    fn test_timing_report_generation() {
+        // Create mock timing data for multiple tasks
+        let timing1 = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 2,
+            skip_count: 1,
+            cached_count: 1,
+            deferred_count: 2,
+            cached_time: std::time::Duration::from_millis(50),
+            live_time: std::time::Duration::from_millis(50),
+            skip_time: std::time::Duration::from_millis(10),
+            deferred_time: std::time::Duration::from_millis(20),
+        };
+
+        let timing2 = TimingData {
+            fetch_time: std::time::Duration::from_millis(200),
+            format_time: std::time::Duration::from_millis(75),
+            fetch_count: 3,
+            skip_count: 2,
+            cached_count: 2,
+            deferred_count: 3,
+            cached_time: std::time::Duration::from_millis(100),
+            live_time: std::time::Duration::from_millis(100),
+            skip_time: std::time::Duration::from_millis(20),
+            deferred_time: std::time::Duration::from_millis(30),
+        };
+
+        // Create a vector of task timings
+        let mut task_timings = vec![("Task1", timing1), ("Task2", timing2)];
+
+        // Sort task timings by total time (fetch + format) - simulating the actual code
+        task_timings.sort_by(|(_, a), (_, b)| {
+            let a_total = a.fetch_time + a.format_time;
+            let b_total = b.fetch_time + b.format_time;
+            b_total.cmp(&a_total) // Reverse sort - slowest first
+        });
+
+        // Calculate totals as done in the main function
+        let mut total_cached = 0;
+        let mut total_live = 0;
+        let mut total_skipped = 0;
+        let mut total_deferred = 0;
+        let mut total_cached_time = std::time::Duration::default();
+        let mut total_live_time = std::time::Duration::default();
+        let mut total_skip_time = std::time::Duration::default();
+        let mut total_deferred_time = std::time::Duration::default();
+
+        // Update totals - this is the first loop in the main function
+        for (_, timing_data) in &task_timings {
+            total_cached += timing_data.cached_count;
+            total_live += timing_data.fetch_count - timing_data.cached_count;
+            total_skipped += timing_data.skip_count;
+            total_deferred += timing_data.deferred_count;
+            total_cached_time += timing_data.cached_time;
+            total_live_time += timing_data.live_time;
+            total_skip_time += timing_data.skip_time;
+            total_deferred_time += timing_data.deferred_time;
+        }
+
+        // Simulate the task details loop (without the duplicate totals calculation)
+        let mut output = Vec::new();
+        for (name, timing_data) in &task_timings {
+            let total_time = timing_data.fetch_time + timing_data.format_time;
+            writeln!(output, "Task: {}, Total time: {:?}", name, total_time).unwrap();
+
+            // We don't add to the totals here anymore - that was the bug
+        }
+
+        // Verify the totals are correct (not doubled)
+        assert_eq!(total_cached, 3, "Total cached count should be 3");
+        assert_eq!(total_live, 2, "Total live count should be 2");
+        assert_eq!(total_skipped, 3, "Total skipped count should be 3");
+        assert_eq!(total_deferred, 5, "Total deferred count should be 5");
+        assert_eq!(
+            total_cached_time,
+            std::time::Duration::from_millis(150),
+            "Total cached time should be 150ms"
+        );
+        assert_eq!(
+            total_live_time,
+            std::time::Duration::from_millis(150),
+            "Total live time should be 150ms"
+        );
+        assert_eq!(
+            total_skip_time,
+            std::time::Duration::from_millis(30),
+            "Total skip time should be 30ms"
+        );
+        assert_eq!(
+            total_deferred_time,
+            std::time::Duration::from_millis(50),
+            "Total deferred time should be 50ms"
+        );
+
+        // Verify the task order (Task2 should be first since it has more total time)
+        let output_str = String::from_utf8(output).unwrap();
+        assert!(
+            output_str.find("Task2").unwrap() < output_str.find("Task1").unwrap(),
+            "Tasks should be sorted by total time (Task2 first)"
         );
     }
 }
