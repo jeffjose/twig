@@ -113,4 +113,4 @@ stale_after = 5
 # Path to store daemon data (JSON format)
 # Can be absolute or relative to config directory
 # Defaults to "data.json" in the same directory as config.toml
-data_file = "data.json"
+#data_file = "/tmpdata.json"

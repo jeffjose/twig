@@ -456,8 +456,8 @@ fn read_cached_data(
     }) {
         Ok(data) => {
             // Check if the data is fresh enough
-            if let Some(updated_at) = data["updated_at"].as_str() {
-                if let Ok(timestamp) = updated_at.parse::<u64>() {
+            if let Some(updated_at) = data["updated_at"].as_object() {
+                if let Some(timestamp) = updated_at["secs_since_epoch"].as_u64() {
                     let now = SystemTime::now()
                         .duration_since(SystemTime::UNIX_EPOCH)
                         .unwrap()
@@ -603,16 +603,34 @@ async fn main() {
             let format_start = Instant::now();
             let mut hostname_vars = Vec::new();
 
-            // Try to get hostname from cache first
             let hostname_data = if let Some(cached) = read_cached_data(
                 &state_clone.config_path,
                 state_clone.config.daemon.stale_after,
                 &state_clone.config,
             ) {
-                timing.cached_count = 1;
-                Ok(cached["hostname"].as_str().unwrap().to_string())
+                if let Some(hostname) = cached.get("hostname") {
+                    if let Some(hostname_str) = hostname.as_str() {
+                        timing.cached_count = 1;
+                        timing.fetch_count = 1;
+                        Ok(hostname_str.to_string())
+                    } else {
+                        // Fall back to live data if cached data is invalid
+                        let fetch_start = Instant::now();
+                        let result = hostname::get_hostname(&hostname::Config::default());
+                        timing.fetch_time = fetch_start.elapsed();
+                        timing.fetch_count = 1;
+                        result
+                    }
+                } else {
+                    // Fall back to live data if hostname not in cache
+                    let fetch_start = Instant::now();
+                    let result = hostname::get_hostname(&hostname::Config::default());
+                    timing.fetch_time = fetch_start.elapsed();
+                    timing.fetch_count = 1;
+                    result
+                }
             } else {
-                // Fall back to live data
+                // Fall back to live data if no cache
                 let fetch_start = Instant::now();
                 let result = hostname::get_hostname(&hostname::Config::default());
                 timing.fetch_time = fetch_start.elapsed();
@@ -657,16 +675,44 @@ async fn main() {
             let format_start = Instant::now();
             let mut ip_vars = Vec::new();
 
-            // Try to get IP from cache first
             let ip_data = if let Some(cached) = read_cached_data(
                 &state_clone.config_path,
                 state_clone.config.daemon.stale_after,
                 &state_clone.config,
             ) {
-                timing.cached_count = 1;
-                Ok(cached["ip"].as_str().unwrap().to_string())
+                if let Some(ip) = cached.get("ip") {
+                    if let Some(ip_str) = ip.as_str() {
+                        timing.cached_count = 1;
+                        timing.fetch_count = 1;
+                        Ok(ip_str.to_string())
+                    } else {
+                        // Fall back to live data if cached data is invalid
+                        let fetch_start = Instant::now();
+                        let result = match &state_clone.config.ip.iter().find(|c| c.interface.is_some()) {
+                            Some(config) => ip::get_ip(config).map(|ip| ip.to_string()),
+                            None => local_ip_address::local_ip()
+                                .map(|ip| ip.to_string())
+                                .map_err(|e| ip::IpConfigError::Lookup(e.to_string())),
+                        };
+                        timing.fetch_time = fetch_start.elapsed();
+                        timing.fetch_count = 1;
+                        result
+                    }
+                } else {
+                    // Fall back to live data if ip not in cache
+                    let fetch_start = Instant::now();
+                    let result = match &state_clone.config.ip.iter().find(|c| c.interface.is_some()) {
+                        Some(config) => ip::get_ip(config).map(|ip| ip.to_string()),
+                        None => local_ip_address::local_ip()
+                            .map(|ip| ip.to_string())
+                            .map_err(|e| ip::IpConfigError::Lookup(e.to_string())),
+                    };
+                    timing.fetch_time = fetch_start.elapsed();
+                    timing.fetch_count = 1;
+                    result
+                }
             } else {
-                // Fall back to live data
+                // Fall back to live data if no cache
                 let fetch_start = Instant::now();
                 let result = match &state_clone.config.ip.iter().find(|c| c.interface.is_some()) {
                     Some(config) => ip::get_ip(config).map(|ip| ip.to_string()),
@@ -755,16 +801,37 @@ async fn main() {
             let mut power_vars = Vec::new();
             let format_start = Instant::now();
 
-            // Try to get power info from cache first
             let battery_info = if let Some(cached) = read_cached_data(
                 &state_clone.config_path,
                 state_clone.config.daemon.stale_after,
                 &state_clone.config,
             ) {
-                timing.cached_count = 1;
-                Ok(serde_json::from_value(cached["power"].clone()).unwrap())
+                if let Some(power) = cached.get("power") {
+                    match serde_json::from_value(power.clone()) {
+                        Ok(info) => {
+                            timing.cached_count = 1;
+                            timing.fetch_count = 1;
+                            Ok(info)
+                        }
+                        Err(_) => {
+                            // Fall back to live data if cached data is invalid
+                            let fetch_start = Instant::now();
+                            let result = power::get_battery_info_internal();
+                            timing.fetch_time = fetch_start.elapsed();
+                            timing.fetch_count = 1;
+                            result
+                        }
+                    }
+                } else {
+                    // Fall back to live data if power not in cache
+                    let fetch_start = Instant::now();
+                    let result = power::get_battery_info_internal();
+                    timing.fetch_time = fetch_start.elapsed();
+                    timing.fetch_count = 1;
+                    result
+                }
             } else {
-                // Fall back to live data
+                // Fall back to live data if no cache
                 let fetch_start = Instant::now();
                 let result = power::get_battery_info_internal();
                 timing.fetch_time = fetch_start.elapsed();
@@ -889,119 +956,112 @@ async fn main() {
             let total_duration = start.elapsed();
             let total_nanos = total_duration.as_nanos() as f64;
 
-            eprintln!("\nTiming information:");
+            // Sort task timings by total time (fetch + format)
+            let mut sorted_timings: Vec<_> = task_timings.into_iter().collect();
+            sorted_timings.sort_by(|(_, a), (_, b)| {
+                let a_total = a.fetch_time + a.format_time;
+                let b_total = b.fetch_time + b.format_time;
+                b_total.cmp(&a_total) // Reverse sort - slowest first
+            });
 
-            // Check daemon status by examining data file
+            // Calculate totals
+            let mut total_cached = 0;
+            let mut total_live = 0;
+            let mut total_skipped = 0;
+            let total_errors = 0;
+
+            // Check daemon status
             let data_path = get_data_file_path(&state.config_path, &state.config);
-
             let daemon_status = if let Ok(content) = fs::read_to_string(&data_path) {
                 if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
                     if let Some(updated_at) = data["updated_at"].as_object() {
-                        // Parse SystemTime format
-                        let secs = updated_at["secs_since_epoch"].as_u64();
-                        let nanos = updated_at["nanos_since_epoch"].as_u64();
-
-                        if let (Some(secs), Some(_)) = (secs, nanos) {
+                        if let (Some(secs), Some(_)) = (
+                            updated_at["secs_since_epoch"].as_u64(),
+                            updated_at["nanos_since_epoch"].as_u64(),
+                        ) {
                             let now = SystemTime::now()
                                 .duration_since(SystemTime::UNIX_EPOCH)
                                 .unwrap()
                                 .as_secs();
                             let age = now.saturating_sub(secs);
                             if age <= state.config.daemon.frequency * 2 {
-                                format!("Running (last update {} seconds ago)", age)
+                                format!("active ({} sec ago)", age)
                             } else {
-                                format!("Not running (last update {} seconds ago)", age)
+                                format!("inactive ({} sec ago)", age)
                             }
                         } else {
-                            "Status unknown (invalid timestamp format)".to_string()
+                            "unknown (bad timestamp)".to_string()
                         }
                     } else {
-                        "Status unknown (no timestamp)".to_string()
+                        "unknown (no timestamp)".to_string()
                     }
                 } else {
-                    "Status unknown (invalid JSON)".to_string()
+                    "unknown (bad data)".to_string()
                 }
             } else {
-                "Not running (no data file)".to_string()
+                "not running".to_string()
             };
 
-            // Calculate data source summary
-            let mut total_cached = 0;
-            let mut total_live = 0;
-            let mut total_skipped = 0;
-            for (_, timing) in &task_timings {
-                total_cached += timing.cached_count;
-                total_live += timing.fetch_count - timing.cached_count;
-                total_skipped += timing.skip_count;
-            }
+            eprintln!("\nTiming Report");
+            eprintln!("daemon: {}", daemon_status);
+            eprintln!("data: {}", data_path.display());
 
-            eprintln!("  Data sources summary:");
-            eprintln!("    Cached items: {}", total_cached);
-            eprintln!("    Live fetched items: {}", total_live);
-            eprintln!("    Skipped items: {}", total_skipped);
-            eprintln!("  Daemon status: {}", daemon_status);
-            eprintln!(
-                "  Config loading: {:?} ({:.1}%)",
-                config_duration,
-                (config_duration.as_nanos() as f64 / total_nanos * 100.0)
-            );
-
-            eprintln!(
-                "  Variable gathering (total): {:?} ({:.1}%)",
-                vars_duration,
-                (vars_duration.as_nanos() as f64 / total_nanos * 100.0)
-            );
-            eprintln!("    Parallel task details (fastest to slowest):");
-
-            // Sort task timings by total time (fetch + format)
-            let mut sorted_timings: Vec<_> = task_timings.into_iter().collect();
-            sorted_timings.sort_by(|(_, a), (_, b)| {
-                let a_total = a.fetch_time + a.format_time;
-                let b_total = b.fetch_time + b.format_time;
-                a_total.cmp(&b_total)
-            });
-
-            for (name, timing_data) in sorted_timings {
+            // Print task details
+            for (name, timing_data) in &sorted_timings {
                 let total_time = timing_data.fetch_time + timing_data.format_time;
-                eprintln!("      {}: ", name);
-                eprintln!(
-                    "        Data source: {}",
-                    if timing_data.cached_count > 0 {
-                        format!("Cache ({} items)", timing_data.cached_count)
-                    } else if timing_data.fetch_count > 0 {
-                        format!("Live fetch ({} items)", timing_data.fetch_count)
-                    } else {
-                        "None".to_string()
-                    }
-                );
+                let percent = total_time.as_nanos() as f64 / total_nanos * 100.0;
+
+                total_cached += timing_data.cached_count;
+                total_live += timing_data.fetch_count - timing_data.cached_count;
+                total_skipped += timing_data.skip_count;
+
+                let source_type = if timing_data.cached_count > 0 && timing_data.fetch_count == timing_data.cached_count {
+                    "[cache]"
+                } else if timing_data.fetch_count > 0 {
+                    "[live]"
+                } else {
+                    "[skip]"
+                };
+
+                let mut stats = Vec::new();
+                if timing_data.cached_count > 0 {
+                    stats.push(format!("cached:{}", timing_data.cached_count));
+                }
+                if timing_data.fetch_count - timing_data.cached_count > 0 {
+                    stats.push(format!("live:{}", timing_data.fetch_count - timing_data.cached_count));
+                }
+                if timing_data.skip_count > 0 {
+                    stats.push(format!("skip:{}", timing_data.skip_count));
+                }
+
                 if timing_data.fetch_count > 0 || timing_data.cached_count > 0 {
-                    eprintln!(
-                        "        Data fetch ({} live, {} cached, {} skipped): {:?} ({:.1}%)",
-                        timing_data.fetch_count - timing_data.cached_count,
-                        timing_data.cached_count,
-                        timing_data.skip_count,
-                        timing_data.fetch_time,
-                        (timing_data.fetch_time.as_nanos() as f64 / total_nanos * 100.0)
-                    );
-                    eprintln!(
-                        "        Formatting: {:?} ({:.1}%)",
-                        timing_data.format_time,
-                        (timing_data.format_time.as_nanos() as f64 / total_nanos * 100.0)
-                    );
-                    eprintln!(
-                        "        Total: {:?} ({:.1}%)",
-                        total_time,
-                        (total_time.as_nanos() as f64 / total_nanos * 100.0)
+                    eprintln!("├─ {} {} ({:.1}%)", source_type, name, percent);
+                    eprintln!("│  ├─ items: {}", stats.join(", "));
+                    eprintln!("│  └─ time: fetch={:.1}ms ({:.1}%), proc={:.1}ms ({:.1}%), total={:.1}ms",
+                        timing_data.fetch_time.as_secs_f64() * 1000.0,
+                        (timing_data.fetch_time.as_nanos() as f64 / total_nanos * 100.0),
+                        timing_data.format_time.as_secs_f64() * 1000.0,
+                        (timing_data.format_time.as_nanos() as f64 / total_nanos * 100.0),
+                        total_time.as_secs_f64() * 1000.0
                     );
                 }
             }
 
-            eprintln!(
-                "  Template formatting: {:?} ({:.1}%)",
-                template_start.elapsed(),
-                (template_start.elapsed().as_nanos() as f64 / total_nanos * 100.0)
+            // Print summary
+            eprintln!("└─ summary");
+            eprintln!("   ├─ items: {} cached, {} live, {} skipped{}",
+                total_cached, total_live, total_skipped,
+                if total_errors > 0 { format!(", {} errors", total_errors) } else { "".to_string() }
             );
-            eprintln!("  Total time: {:?}", total_duration);
+            eprintln!("   └─ time: cfg={:.1}ms ({:.1}%), data={:.1}ms ({:.1}%), tmpl={:.1}ms ({:.1}%), total={:.1}ms",
+                config_duration.as_secs_f64() * 1000.0,
+                (config_duration.as_nanos() as f64 / total_nanos * 100.0),
+                vars_duration.as_secs_f64() * 1000.0,
+                (vars_duration.as_nanos() as f64 / total_nanos * 100.0),
+                template_start.elapsed().as_secs_f64() * 1000.0,
+                (template_start.elapsed().as_nanos() as f64 / total_nanos * 100.0),
+                total_duration.as_secs_f64() * 1000.0
+            );
         }
 
         Ok(())
@@ -1365,5 +1425,226 @@ mod tests {
 
         let total_time = timing.fetch_time + timing.format_time;
         assert_eq!(total_time, std::time::Duration::from_millis(150));
+    }
+
+    #[test]
+    fn test_source_type_display() {
+        // Helper function to determine source type
+        fn get_source_type(timing: &TimingData) -> &'static str {
+            if timing.cached_count > 0 && timing.fetch_count == timing.cached_count {
+                "[cache]"
+            } else if timing.fetch_count > 0 {
+                "[live]"
+            } else {
+                "[skip]"
+            }
+        }
+
+        // Test case 1: All data from cache
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 2,
+            cached_count: 2,
+            skip_count: 0,
+        };
+        assert_eq!(
+            get_source_type(&timing),
+            "[cache]",
+            "Should show [cache] when all data is cached"
+        );
+
+        // Test case 2: Mixed cache and live data
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 3,
+            cached_count: 1,
+            skip_count: 0,
+        };
+        assert_eq!(
+            get_source_type(&timing),
+            "[live]",
+            "Should show [live] when any data is fetched live"
+        );
+
+        // Test case 3: All live data
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 2,
+            cached_count: 0,
+            skip_count: 0,
+        };
+        assert_eq!(
+            get_source_type(&timing),
+            "[live]",
+            "Should show [live] when all data is fetched live"
+        );
+
+        // Test case 4: Skipped data
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(0),
+            format_time: std::time::Duration::from_millis(0),
+            fetch_count: 0,
+            cached_count: 0,
+            skip_count: 2,
+        };
+        assert_eq!(
+            get_source_type(&timing),
+            "[skip]",
+            "Should show [skip] when data is skipped"
+        );
+    }
+
+    #[test]
+    fn test_read_cached_data() {
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let data_path = temp_dir.path().join("data.json");
+
+        // Create config
+        let config = Config {
+            daemon: DaemonConfig {
+                frequency: 1,
+                stale_after: 5,
+                data_file: PathBuf::from("data.json"),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // Test case 1: Fresh cache data
+        {
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap();
+            let data = serde_json::json!({
+                "updated_at": {
+                    "secs_since_epoch": now.as_secs(),
+                    "nanos_since_epoch": now.subsec_nanos(),
+                },
+                "hostname": "test-host",
+                "ip": "192.168.1.1",
+                "power": {
+                    "percentage": 100,
+                    "status": "Full",
+                    "time_left": "",
+                    "power_now": 0.0,
+                    "energy_now": 50.0,
+                    "energy_full": 50.0,
+                    "voltage": 12.0,
+                    "temperature": 25.0,
+                    "capacity": 100,
+                    "cycle_count": 0,
+                    "technology": "Li-ion",
+                    "manufacturer": "Test",
+                    "model": "Test",
+                    "serial": "123"
+                }
+            });
+            fs::write(&data_path, serde_json::to_string_pretty(&data).unwrap()).unwrap();
+
+            let cached = read_cached_data(&config_path, config.daemon.stale_after, &config);
+            assert!(cached.is_some(), "Should read fresh cache data");
+            let cached = cached.unwrap();
+            assert_eq!(
+                cached["hostname"], "test-host",
+                "Should read correct hostname"
+            );
+            assert_eq!(cached["ip"], "192.168.1.1", "Should read correct IP");
+        }
+
+        // Test case 2: Stale cache data
+        {
+            let stale_time = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .checked_sub(std::time::Duration::from_secs(10))
+                .unwrap();
+            let data = serde_json::json!({
+                "updated_at": {
+                    "secs_since_epoch": stale_time.as_secs(),
+                    "nanos_since_epoch": stale_time.subsec_nanos(),
+                },
+                "hostname": "stale-host",
+            });
+            fs::write(&data_path, serde_json::to_string_pretty(&data).unwrap()).unwrap();
+
+            let cached = read_cached_data(&config_path, config.daemon.stale_after, &config);
+            assert!(cached.is_none(), "Should not read stale cache data");
+        }
+
+        // Test case 3: Invalid cache data
+        {
+            fs::write(&data_path, "invalid json").unwrap();
+            let cached = read_cached_data(&config_path, config.daemon.stale_after, &config);
+            assert!(cached.is_none(), "Should not read invalid cache data");
+        }
+
+        // Test case 4: Missing cache file
+        {
+            fs::remove_file(&data_path).unwrap();
+            let cached = read_cached_data(&config_path, config.daemon.stale_after, &config);
+            assert!(cached.is_none(), "Should handle missing cache file");
+        }
+    }
+
+    #[test]
+    fn test_timing_source_determination() {
+        // Test case 1: All data from cache
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 2,
+            cached_count: 2,
+            skip_count: 0,
+        };
+        assert_eq!(
+            timing.fetch_count, timing.cached_count,
+            "All fetches should be cached"
+        );
+        assert_eq!(
+            timing.fetch_count - timing.cached_count,
+            0,
+            "Should have no live fetches"
+        );
+
+        // Test case 2: Mixed cache and live data
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 3,
+            cached_count: 1,
+            skip_count: 0,
+        };
+        assert_eq!(
+            timing.fetch_count - timing.cached_count,
+            2,
+            "Should have 2 live fetches"
+        );
+        assert_eq!(timing.cached_count, 1, "Should have 1 cached fetch");
+
+        // Test case 3: All live data
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 2,
+            cached_count: 0,
+            skip_count: 0,
+        };
+        assert_eq!(timing.cached_count, 0, "Should have no cached data");
+        assert_eq!(timing.fetch_count, 2, "Should have all live fetches");
+
+        // Test case 4: Skipped data
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(0),
+            format_time: std::time::Duration::from_millis(0),
+            fetch_count: 0,
+            cached_count: 0,
+            skip_count: 2,
+        };
+        assert_eq!(timing.fetch_count, 0, "Should have no fetches");
+        assert_eq!(timing.skip_count, 2, "Should have skipped items");
     }
 }
