@@ -23,6 +23,8 @@ pub struct TimeConfig {
     #[serde(default = "default_time_format")]
     pub format: String,
     pub name: Option<String>,
+    #[serde(default)]
+    pub deferred: bool,
 }
 
 impl Default for TimeConfig {
@@ -30,6 +32,7 @@ impl Default for TimeConfig {
         Self {
             format: default_time_format(),
             name: None,
+            deferred: false,
         }
     }
 }
@@ -121,6 +124,7 @@ mod tests {
         let config = TimeConfig {
             format: "%Y-%m-%d".to_string(),
             name: Some("date".to_string()),
+            deferred: false,
         };
         assert_eq!(config.format, "%Y-%m-%d");
         assert_eq!(config.name, Some("date".to_string()));

@@ -88,6 +88,8 @@ impl Default for BatteryInfo {
 pub struct Config {
     pub name: Option<String>,
     pub format: String,
+    #[serde(default)]
+    pub deferred: bool,
 }
 
 impl Default for Config {
@@ -95,6 +97,7 @@ impl Default for Config {
         Self {
             name: None,
             format: "{percentage}% ({status})".to_string(),
+            deferred: false,
         }
     }
 }
@@ -149,14 +152,47 @@ mod tests {
         let config = Config {
             name: Some("test".to_string()),
             format: "{percentage}% ({power_now}W)".to_string(),
+            deferred: false,
         };
 
         let serialized = serde_json::to_string(&config).unwrap();
-        let expected = r#"{"name":"test","format":"{percentage}% ({power_now}W)"}"#;
+        let expected =
+            r#"{"name":"test","format":"{percentage}% ({power_now}W)","deferred":false}"#;
         assert_eq!(serialized, expected);
 
         let deserialized: Config = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.name, Some("test".to_string()));
         assert_eq!(deserialized.format, "{percentage}% ({power_now}W)");
+        assert_eq!(deserialized.deferred, false);
+    }
+
+    #[test]
+    fn test_custom_config() {
+        let config = Config {
+            name: Some("test".to_string()),
+            format: "{percentage}% ({status})".to_string(),
+            deferred: false,
+        };
+        assert_eq!(config.name, Some("test".to_string()));
+        assert_eq!(config.format, "{percentage}% ({status})");
+        assert_eq!(config.deferred, false);
+    }
+
+    #[test]
+    fn test_deferred_config() {
+        let config = Config {
+            name: Some("test".to_string()),
+            format: "{percentage}% ({status})".to_string(),
+            deferred: true,
+        };
+        assert!(config.deferred);
+        assert_eq!(config.name, Some("test".to_string()));
+        assert_eq!(config.format, "{percentage}% ({status})");
+    }
+
+    #[test]
+    fn test_deferred_default() {
+        let config = Config::default();
+        assert!(!config.deferred, "deferred should be false by default");
     }
 }

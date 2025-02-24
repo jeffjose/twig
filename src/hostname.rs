@@ -17,10 +17,21 @@ impl std::fmt::Display for HostnameError {
 
 impl Error for HostnameError {}
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     // Hostname-specific config options will go here
     pub name: Option<String>,
+    #[serde(default)]
+    pub deferred: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            name: None,
+            deferred: false,
+        }
+    }
 }
 
 pub fn get_hostname(_config: &Config) -> Result<String, HostnameError> {
@@ -59,6 +70,7 @@ mod tests {
     fn test_config_with_name() {
         let config = Config {
             name: Some("host".to_string()),
+            deferred: false,
         };
         assert_eq!(config.name, Some("host".to_string()));
     }
@@ -77,5 +89,31 @@ mod tests {
             let result = get_hostname(&config).unwrap();
             assert_eq!(result, env_hostname);
         }
+    }
+
+    #[test]
+    fn test_get_hostname() {
+        let config = Config {
+            name: None,
+            deferred: false,
+        };
+        let result = get_hostname(&config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_deferred_config() {
+        let config = Config {
+            name: Some("host".to_string()),
+            deferred: true,
+        };
+        assert!(config.deferred);
+        assert_eq!(config.name, Some("host".to_string()));
+    }
+
+    #[test]
+    fn test_deferred_default() {
+        let config = Config::default();
+        assert!(!config.deferred, "deferred should be false by default");
     }
 }

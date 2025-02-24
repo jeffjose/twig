@@ -2,6 +2,7 @@ use local_ip_address::list_afinet_netifas;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::net::IpAddr;
+use std::time::Instant;
 
 #[derive(Debug)]
 pub enum IpConfigError {
@@ -20,11 +21,22 @@ impl std::fmt::Display for IpConfigError {
 
 impl Error for IpConfigError {}
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    // IP-specific config options will go here
     pub name: Option<String>,
     pub interface: Option<String>,
+    #[serde(default)]
+    pub deferred: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            name: None,
+            interface: None,
+            deferred: false,
+        }
+    }
 }
 
 pub fn get_ip(config: &Config) -> Result<IpAddr, IpConfigError> {
@@ -52,7 +64,71 @@ pub fn get_ip(config: &Config) -> Result<IpAddr, IpConfigError> {
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-    use std::time::Instant;
+
+    #[test]
+    fn test_get_ip_no_interface() {
+        let config = Config {
+            name: None,
+            interface: None,
+            deferred: false,
+        };
+        let result = get_ip(&config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_ip_with_interface() {
+        let config = Config {
+            name: None,
+            interface: Some("lo".to_string()),
+            deferred: false,
+        };
+        let result = get_ip(&config);
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), IpAddr::V4(_) | IpAddr::V6(_)));
+    }
+
+    #[test]
+    fn test_get_ip_invalid_interface() {
+        let config = Config {
+            name: None,
+            interface: Some("invalid_interface".to_string()),
+            deferred: false,
+        };
+        let result = get_ip(&config);
+        assert!(matches!(result, Err(IpConfigError::InterfaceNotFound(_))));
+    }
+
+    #[test]
+    fn test_get_ip_error_handling() {
+        let config = Config {
+            name: None,
+            interface: Some("".to_string()),
+            deferred: false,
+        };
+        let result = get_ip(&config);
+        assert!(matches!(result, Err(IpConfigError::InterfaceNotFound(_))));
+    }
+
+    #[test]
+    fn test_default_config() {
+        let config = Config::default();
+        assert_eq!(config.name, None);
+        assert_eq!(config.interface, None);
+        assert_eq!(config.deferred, false);
+    }
+
+    #[test]
+    fn test_custom_config() {
+        let config = Config {
+            name: Some("test".to_string()),
+            interface: Some("eth0".to_string()),
+            deferred: false,
+        };
+        assert_eq!(config.name, Some("test".to_string()));
+        assert_eq!(config.interface, Some("eth0".to_string()));
+        assert_eq!(config.deferred, false);
+    }
 
     #[test]
     fn test_default_ip_retrieval() {
@@ -84,6 +160,7 @@ mod tests {
         let config = Config {
             name: Some("local".to_string()),
             interface: Some("eth0".to_string()),
+            deferred: false,
         };
         assert_eq!(config.name, Some("local".to_string()));
         assert_eq!(config.interface, Some("eth0".to_string()));
@@ -94,6 +171,7 @@ mod tests {
         let config = Config {
             name: None,
             interface: Some("nonexistent0".to_string()),
+            deferred: false,
         };
         let result = get_ip(&config);
         assert!(result.is_err());
@@ -134,6 +212,7 @@ mod tests {
             let config = Config {
                 name: None,
                 interface: Some(interface_name.clone()),
+                deferred: false,
             };
             let result = get_ip(&config);
             assert!(result.is_ok());
@@ -145,6 +224,7 @@ mod tests {
         let config = Config {
             name: None,
             interface: Some("".to_string()),
+            deferred: false,
         };
         let result = get_ip(&config);
         assert!(result.is_err());
@@ -161,6 +241,7 @@ mod tests {
         let config = Config {
             name: None,
             interface: Some("インターフェース".to_string()),
+            deferred: false,
         };
         let result = get_ip(&config);
         assert!(result.is_err());
@@ -177,6 +258,7 @@ mod tests {
         let config = Config {
             name: None,
             interface: Some("eth0!@#$%^&*()".to_string()),
+            deferred: false,
         };
         let result = get_ip(&config);
         assert!(result.is_err());
@@ -218,6 +300,7 @@ mod tests {
             let config = Config {
                 name: None,
                 interface: Some(interface_name.clone()),
+                deferred: false,
             };
             let result = get_ip(&config);
             assert!(
@@ -243,6 +326,7 @@ mod tests {
                 let config = Config {
                     name: None,
                     interface: Some(interface_name.to_uppercase()),
+                    deferred: false,
                 };
                 let result = get_ip(&config);
                 assert!(result.is_err());
@@ -251,6 +335,7 @@ mod tests {
                 let config = Config {
                     name: None,
                     interface: Some(interface_name.to_lowercase()),
+                    deferred: false,
                 };
                 let result = get_ip(&config);
                 if interface_name != interface_name.to_lowercase() {
@@ -258,5 +343,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_get_ip_timing() {
+        let config = Config {
+            name: None,
+            interface: Some("lo".to_string()),
+            deferred: false,
+        };
+        let start = Instant::now();
+        let _ = get_ip(&config);
+        let duration = start.elapsed();
+        assert!(duration.as_secs() < 1); // Should complete in under a second
+    }
+
+    #[test]
+    fn test_deferred_config() {
+        let config = Config {
+            name: Some("test".to_string()),
+            interface: Some("eth0".to_string()),
+            deferred: true,
+        };
+        assert!(config.deferred);
+        assert_eq!(config.name, Some("test".to_string()));
+        assert_eq!(config.interface, Some("eth0".to_string()));
+    }
+
+    #[test]
+    fn test_deferred_default() {
+        let config = Config::default();
+        assert!(!config.deferred, "deferred should be false by default");
     }
 }

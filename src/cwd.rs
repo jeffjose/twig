@@ -20,16 +20,28 @@ impl std::fmt::Display for CwdError {
 
 impl Error for CwdError {}
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    pub name: Option<String>,
     #[serde(default)]
-    pub shorten: bool,  // If true, show only the last component
-    pub name: Option<String>,  // Add name field
+    pub shorten: bool,
+    #[serde(default)]
+    pub deferred: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            name: None,
+            shorten: false,
+            deferred: false,
+        }
+    }
 }
 
 pub fn get_cwd(config: &Config) -> Result<String, CwdError> {
     let path = env::current_dir().map_err(CwdError::GetCwd)?;
-    
+
     if config.shorten {
         if path == std::path::Path::new("/") {
             Ok("/".to_string())
@@ -52,10 +64,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_get_cwd() {
+        let config = Config {
+            name: None,
+            shorten: false,
+            deferred: false,
+        };
+        let result = get_cwd(&config).unwrap();
+        assert!(result.starts_with("/")); // Should be absolute path
+    }
+
+    #[test]
+    fn test_get_cwd_shortened() {
+        let config = Config {
+            name: None,
+            shorten: true,
+            deferred: false,
+        };
+        let result = get_cwd(&config).unwrap();
+        assert!(!result.contains("/")); // Should be just the directory name
+    }
+
+    #[test]
+    fn test_default_config() {
+        let config = Config::default();
+        assert_eq!(config.name, None);
+        assert_eq!(config.shorten, false);
+        assert_eq!(config.deferred, false);
+    }
+
+    #[test]
     fn test_shorten_path() {
         let config = Config {
             shorten: true,
             name: Some("dir".to_string()),
+            deferred: false,
         };
 
         // Create a test directory and change into it
@@ -77,10 +120,11 @@ mod tests {
         let config = Config {
             shorten: false,
             name: Some("dir".to_string()),
+            deferred: false,
         };
 
         let result = get_cwd(&config).unwrap();
-        assert!(result.starts_with("/"));  // Should be absolute path
+        assert!(result.starts_with("/")); // Should be absolute path
     }
 
     #[test]
@@ -88,6 +132,7 @@ mod tests {
         let config = Config {
             shorten: true,
             name: Some("dir".to_string()),
+            deferred: false,
         };
 
         // Try with root directory
@@ -96,4 +141,22 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "/");
     }
-} 
+
+    #[test]
+    fn test_deferred_config() {
+        let config = Config {
+            name: Some("dir".to_string()),
+            shorten: true,
+            deferred: true,
+        };
+        assert!(config.deferred);
+        assert_eq!(config.name, Some("dir".to_string()));
+        assert!(config.shorten);
+    }
+
+    #[test]
+    fn test_deferred_default() {
+        let config = Config::default();
+        assert!(!config.deferred, "deferred should be false by default");
+    }
+}
