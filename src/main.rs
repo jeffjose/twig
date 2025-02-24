@@ -548,7 +548,7 @@ async fn main() {
 
         // Create parallel tasks for each config section
         let mut tasks: Vec<tokio::task::JoinHandle<TaskResult>> = Vec::new();
-        let mut task_names = Vec::new();
+        let mut task_names: Vec<&str> = Vec::new();
 
         // Handle time variables
         let state_clone = state.clone();
@@ -562,7 +562,7 @@ async fn main() {
             };
 
             let format_start = Instant::now();
-            let mut time_vars = Vec::new();
+            let mut time_vars: Vec<(String, String)> = Vec::new();
             for (i, time_config) in state_clone.config.time.iter().enumerate() {
                 let var_name = get_var_name(time_config, "time", i);
                 if format_uses_variable(&state_clone.prompt_format, &var_name) {
@@ -925,6 +925,20 @@ async fn main() {
                 "Not running (no data file)".to_string()
             };
 
+            // Calculate data source summary
+            let mut total_cached = 0;
+            let mut total_live = 0;
+            let mut total_skipped = 0;
+            for (_, timing) in &task_timings {
+                total_cached += timing.cached_count;
+                total_live += timing.fetch_count - timing.cached_count;
+                total_skipped += timing.skip_count;
+            }
+
+            eprintln!("  Data sources summary:");
+            eprintln!("    Cached items: {}", total_cached);
+            eprintln!("    Live fetched items: {}", total_live);
+            eprintln!("    Skipped items: {}", total_skipped);
             eprintln!("  Daemon status: {}", daemon_status);
             eprintln!(
                 "  Config loading: {:?} ({:.1}%)",
@@ -950,35 +964,36 @@ async fn main() {
             for (name, timing_data) in sorted_timings {
                 let total_time = timing_data.fetch_time + timing_data.format_time;
                 eprintln!("      {}: ", name);
-                if timing_data.cached_count > 0 {
+                eprintln!(
+                    "        Data source: {}",
+                    if timing_data.cached_count > 0 {
+                        format!("Cache ({} items)", timing_data.cached_count)
+                    } else if timing_data.fetch_count > 0 {
+                        format!("Live fetch ({} items)", timing_data.fetch_count)
+                    } else {
+                        "None".to_string()
+                    }
+                );
+                if timing_data.fetch_count > 0 || timing_data.cached_count > 0 {
                     eprintln!(
-                        "        Data source: Cache ({} items)",
-                        timing_data.cached_count
+                        "        Data fetch ({} live, {} cached, {} skipped): {:?} ({:.1}%)",
+                        timing_data.fetch_count - timing_data.cached_count,
+                        timing_data.cached_count,
+                        timing_data.skip_count,
+                        timing_data.fetch_time,
+                        (timing_data.fetch_time.as_nanos() as f64 / total_nanos * 100.0)
                     );
-                } else if timing_data.fetch_count > 0 {
                     eprintln!(
-                        "        Data source: Live fetch ({} items)",
-                        timing_data.fetch_count
+                        "        Formatting: {:?} ({:.1}%)",
+                        timing_data.format_time,
+                        (timing_data.format_time.as_nanos() as f64 / total_nanos * 100.0)
+                    );
+                    eprintln!(
+                        "        Total: {:?} ({:.1}%)",
+                        total_time,
+                        (total_time.as_nanos() as f64 / total_nanos * 100.0)
                     );
                 }
-                eprintln!(
-                    "        Data fetch ({} processed, {} cached, {} skipped): {:?} ({:.1}%)",
-                    timing_data.fetch_count - timing_data.cached_count,
-                    timing_data.cached_count,
-                    timing_data.skip_count,
-                    timing_data.fetch_time,
-                    (timing_data.fetch_time.as_nanos() as f64 / total_nanos * 100.0)
-                );
-                eprintln!(
-                    "        Formatting: {:?} ({:.1}%)",
-                    timing_data.format_time,
-                    (timing_data.format_time.as_nanos() as f64 / total_nanos * 100.0)
-                );
-                eprintln!(
-                    "        Total: {:?} ({:.1}%)",
-                    total_time,
-                    (total_time.as_nanos() as f64 / total_nanos * 100.0)
-                );
             }
 
             eprintln!(
@@ -1159,6 +1174,9 @@ async fn run_daemon(cli: &Cli) -> Result<(), DaemonError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::time::Instant;
+    use tempfile::tempdir;
 
     #[test]
     fn test_cli_flags() {
@@ -1188,5 +1206,164 @@ mod tests {
         } else {
             panic!("Expected daemon command");
         }
+    }
+
+    #[test]
+    fn test_timing_output_format() {
+        // Create a temporary directory for config and data files
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+
+        // Create a basic config file
+        let config_content = r#"
+            [[time]]
+            format = "%H:%M:%S"
+
+            [prompt]
+            format = "{time}"
+
+            [daemon]
+            frequency = 1
+            stale_after = 5
+            data_file = "data.json"
+        "#;
+        fs::write(&config_path, config_content).unwrap();
+
+        // Create a CLI instance with timing enabled
+        let cli = Cli {
+            timing: true,
+            config: Some(config_path.clone()),
+            mode: None,
+            validate: false,
+            colors: false,
+            command: None,
+        };
+
+        // Capture stderr output
+        let mut stderr = Vec::new();
+        {
+            let start = Instant::now();
+            let config_start = Instant::now();
+            let config_path = get_config_path(&cli.config).unwrap();
+            let config = Arc::new(load_config(&config_path).unwrap());
+            let config_duration = config_start.elapsed();
+
+            let vars_start = Instant::now();
+            let state = SharedState {
+                config: config.clone(),
+                config_path: config_path.clone(),
+                prompt_format: config.prompt.format.clone(),
+                validate: cli.validate,
+            };
+
+            let mut time_vars: Vec<(String, String)> = Vec::new();
+            let mut timing = TimingData {
+                fetch_time: std::time::Duration::default(),
+                format_time: std::time::Duration::default(),
+                fetch_count: 0,
+                skip_count: 0,
+                cached_count: 0,
+            };
+
+            let format_start = Instant::now();
+            for (i, time_config) in state.config.time.iter().enumerate() {
+                let var_name = get_var_name(time_config, "time", i);
+                if format_uses_variable(&state.prompt_format, &var_name) {
+                    let fetch_start = Instant::now();
+                    match format_current_time(&time_config.format) {
+                        Ok(time) => {
+                            timing.fetch_time += fetch_start.elapsed();
+                            timing.fetch_count += 1;
+                            time_vars.push((var_name, time));
+                        }
+                        Err(e) => {
+                            if state.validate {
+                                writeln!(stderr, "Warning: couldn't format time: {}", e).unwrap();
+                            }
+                        }
+                    }
+                } else {
+                    timing.skip_count += 1;
+                }
+            }
+            timing.format_time = format_start.elapsed();
+
+            let vars_duration = vars_start.elapsed();
+            let total_duration = start.elapsed();
+            let total_nanos = total_duration.as_nanos() as f64;
+
+            writeln!(stderr, "\nTiming information:").unwrap();
+            writeln!(stderr, "  Data sources summary:").unwrap();
+            writeln!(stderr, "    Cached items: {}", timing.cached_count).unwrap();
+            writeln!(
+                stderr,
+                "    Live fetched items: {}",
+                timing.fetch_count - timing.cached_count
+            )
+            .unwrap();
+            writeln!(stderr, "    Skipped items: {}", timing.skip_count).unwrap();
+            writeln!(stderr, "  Daemon status: Not running (no data file)").unwrap();
+            writeln!(
+                stderr,
+                "  Config loading: {:?} ({:.1}%)",
+                config_duration,
+                (config_duration.as_nanos() as f64 / total_nanos * 100.0)
+            )
+            .unwrap();
+            writeln!(
+                stderr,
+                "  Variable gathering (total): {:?} ({:.1}%)",
+                vars_duration,
+                (vars_duration.as_nanos() as f64 / total_nanos * 100.0)
+            )
+            .unwrap();
+            writeln!(stderr, "  Total time: {:?}", total_duration).unwrap();
+        }
+
+        // Convert stderr to string
+        let stderr = String::from_utf8(stderr).unwrap();
+
+        // Verify timing output format
+        assert!(
+            stderr.contains("Timing information:"),
+            "stderr should contain 'Timing information:', got: {}",
+            stderr
+        );
+        assert!(stderr.contains("Data sources summary:"));
+        assert!(stderr.contains("Cached items:"));
+        assert!(stderr.contains("Live fetched items:"));
+        assert!(stderr.contains("Skipped items:"));
+        assert!(stderr.contains("Config loading:"));
+        assert!(stderr.contains("Variable gathering (total):"));
+        assert!(stderr.contains("Total time:"));
+    }
+
+    #[test]
+    fn test_timing_data_source_tracking() {
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 2,
+            skip_count: 1,
+            cached_count: 1,
+        };
+
+        assert_eq!(timing.fetch_count - timing.cached_count, 1); // Live fetches
+        assert_eq!(timing.cached_count, 1); // Cached items
+        assert_eq!(timing.skip_count, 1); // Skipped items
+    }
+
+    #[test]
+    fn test_timing_duration_calculation() {
+        let timing = TimingData {
+            fetch_time: std::time::Duration::from_millis(100),
+            format_time: std::time::Duration::from_millis(50),
+            fetch_count: 1,
+            skip_count: 0,
+            cached_count: 0,
+        };
+
+        let total_time = timing.fetch_time + timing.format_time;
+        assert_eq!(total_time, std::time::Duration::from_millis(150));
     }
 }
