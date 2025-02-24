@@ -5,13 +5,13 @@ use std::fmt;
 
 #[derive(Debug)]
 pub enum TimeError {
-    Format(String),
+    Format(()),
 }
 
 impl fmt::Display for TimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TimeError::Format(s) => write!(f, "Format error: {}", s),
+            TimeError::Format(_) => write!(f, "Invalid time format"),
         }
     }
 }
@@ -43,19 +43,37 @@ pub fn format_current_time(format: &str) -> Result<String, TimeError> {
         return Ok(String::new());
     }
 
-    let now = Local::now();
-    let result = std::panic::catch_unwind(|| now.format(format).to_string());
-
-    match result {
-        Ok(formatted) => {
-            if formatted.contains('%') && format.contains('%') {
-                Err(TimeError::Format(format.to_string()))
-            } else {
-                Ok(formatted)
+    // Check for invalid format specifiers
+    let mut i = 0;
+    let bytes = format.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            i += 1;
+            if i >= bytes.len() {
+                return Err(TimeError::Format(()));
+            }
+            // Handle numeric modifiers (e.g. %3f)
+            if bytes[i].is_ascii_digit() {
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i >= bytes.len() {
+                    return Err(TimeError::Format(()));
+                }
+            }
+            match bytes[i] {
+                b'A' | b'a' | b'B' | b'b' | b'C' | b'c' | b'd' | b'D' | b'e' | b'f' | b'F'
+                | b'H' | b'h' | b'I' | b'j' | b'k' | b'l' | b'M' | b'm' | b'n' | b'P' | b'p'
+                | b'R' | b'r' | b'S' | b'T' | b't' | b'U' | b'u' | b'V' | b'v' | b'W' | b'w'
+                | b'X' | b'x' | b'Y' | b'y' | b'Z' | b'z' | b'%' => (),
+                _ => return Err(TimeError::Format(())),
             }
         }
-        Err(_) => Err(TimeError::Format(format.to_string())),
+        i += 1;
     }
+
+    let now = Local::now();
+    Ok(now.format(format).to_string())
 }
 
 #[cfg(test)]
@@ -65,14 +83,31 @@ mod tests {
     use std::time::Instant;
 
     #[test]
+    fn test_format_current_time_empty() {
+        let result = format_current_time("");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "");
+    }
+
+    #[test]
+    fn test_format_current_time_invalid() {
+        let result = format_current_time("%invalid");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Invalid time format");
+    }
+
+    #[test]
     fn test_format_current_time_parse_error() {
-        // Test with a format string that would cause a parse error
         let result = format_current_time("%");
         assert!(result.is_err());
-        match result {
-            Err(TimeError::Format(s)) => assert_eq!(s, "%"),
-            _ => panic!("Expected Format error"),
-        }
+        assert_eq!(result.unwrap_err().to_string(), "Invalid time format");
+    }
+
+    #[test]
+    fn test_format_current_time_mixed_valid_invalid() {
+        let result = format_current_time("%H:%M:%invalid");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Invalid time format");
     }
 
     #[test]
@@ -108,29 +143,11 @@ mod tests {
     }
 
     #[test]
-    fn test_format_current_time_invalid() {
-        // Test with an invalid format string
-        let result = format_current_time("%invalid");
-        assert!(result.is_err());
-        match result {
-            Err(TimeError::Format(msg)) => assert_eq!(msg, "%invalid"),
-            _ => panic!("Expected Format error"),
-        }
-    }
-
-    #[test]
     fn test_time_matches_system() {
         let now = Local::now();
         let formatted = format_current_time("%H").unwrap();
         let system_hour = now.format("%H").to_string();
         assert_eq!(formatted, system_hour);
-    }
-
-    #[test]
-    fn test_format_current_time_empty() {
-        let result = format_current_time("");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "");
     }
 
     #[test]
@@ -164,17 +181,6 @@ mod tests {
         let result = format_current_time(format).unwrap();
         let re = Regex::new(r"^年:\d{4} 月:\d{2} 日:\d{2} 時:\d{2} 分:\d{2} 秒:\d{2}$").unwrap();
         assert!(re.is_match(&result));
-    }
-
-    #[test]
-    fn test_format_current_time_mixed_valid_invalid() {
-        let format = "%Y-%invalid-%d";
-        let result = format_current_time(format);
-        assert!(result.is_err());
-        match result {
-            Err(TimeError::Format(msg)) => assert_eq!(msg, "%Y-%invalid-%d"),
-            _ => panic!("Expected Format error"),
-        }
     }
 
     #[test]
