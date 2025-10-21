@@ -159,15 +159,7 @@ fn print_boxed(
     // Bottom border
     println!("└{}┘", "─".repeat(max_width + 2));
 
-    // Timing information (dimmed)
-    println!(
-        "\x1b[2mTiming: {:.2}ms total (config: {:.2}ms | render: {:.2}ms)\x1b[0m",
-        total_time.as_secs_f64() * 1000.0,
-        config_time.as_secs_f64() * 1000.0,
-        render_time.as_secs_f64() * 1000.0
-    );
-
-    // Provider timing breakdown (dimmed)
+    // Provider timing breakdown (dimmed) - shown first
     if !provider_timings.is_empty() {
         let provider_times: Vec<String> = provider_timings
             .iter()
@@ -175,6 +167,14 @@ fn print_boxed(
             .collect();
         println!("\x1b[2m        {}\x1b[0m", provider_times.join(" | "));
     }
+
+    // Timing information (dimmed) - shown last
+    println!(
+        "\x1b[2mTiming: {:.2}ms total (config: {:.2}ms | render: {:.2}ms)\x1b[0m",
+        total_time.as_secs_f64() * 1000.0,
+        config_time.as_secs_f64() * 1000.0,
+        render_time.as_secs_f64() * 1000.0
+    );
 }
 
 /// Print debug information in a classy box to stderr
@@ -222,14 +222,16 @@ fn print_debug_box(
     let header_width = display_width(header);
     eprintln!("{}{}┐", header, "─".repeat(max_width + 2 - header_width));
 
-    // Content lines
+    // Content lines - config first
     eprintln!("│ {}{} │", config_str, " ".repeat(max_width - config_width));
-    eprintln!("│ {}{} │", timing_str, " ".repeat(max_width - timing_width));
 
-    // Provider timing lines
+    // Provider timing lines - shown before total
     for (provider_str, width) in provider_strs.iter().zip(provider_widths.iter()) {
         eprintln!("│ {}{} │", provider_str, " ".repeat(max_width - width));
     }
+
+    // Total timing line - shown last
+    eprintln!("│ {}{} │", timing_str, " ".repeat(max_width - timing_width));
 
     // Bottom border
     eprintln!("└{}┘", "─".repeat(max_width + 2));
