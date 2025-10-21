@@ -6,5 +6,7 @@ format = "%H:%M:%S"
 [cwd]
 
 [prompt]
-format = '''{time:cyan} {$USER:bright_green,bold}@{host:magenta} {dir:green}
+# Section names = variable names: {time}, {hostname}, {cwd}
+# Environment variables: {$USER}, {$HOME}, etc.
+format = '''{time:cyan} {$USER:bright_green,bold}@{hostname:magenta} {cwd:green}
 {"$":white,bold} '''

@@ -97,7 +97,7 @@ fn main() {
                     .to_string_lossy()
                     .to_string()
             });
-        variables.insert("host", hostname);
+        variables.insert("hostname", hostname);  // Section name = variable name
     }
 
     // Get current working directory if configured
@@ -106,7 +106,7 @@ fn main() {
             .unwrap_or_else(|_| std::path::PathBuf::from("?"))
             .to_string_lossy()
             .to_string();
-        variables.insert("dir", cwd);
+        variables.insert("cwd", cwd);  // Section name = variable name
     }
 
     // Perform variable substitution with color support
@@ -241,7 +241,7 @@ fn create_default_config() -> Config {
         hostname: Some(HostnameConfig {}),
         cwd: Some(CwdConfig {}),
         prompt: PromptConfig {
-            format: "{time:cyan} {\"@\":yellow,bold} {host:magenta} {dir:green} {\"$\":white,bold} ".to_string(),
+            format: "{time:cyan} {\"@\":yellow,bold} {hostname:magenta} {cwd:green} {\"$\":white,bold} ".to_string(),
         },
     }
 }
