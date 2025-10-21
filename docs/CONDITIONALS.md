@@ -461,3 +461,136 @@ format = '{git_branch:match($branch, "main"=>green, _=>yellow)} {cwd:green}'
 Then wait for user feedback before implementing Phase 2+. Don't build features users don't need.
 
 **Key Principle**: **Make simple things simple, and complex things possible.**
+
+---
+
+## ✅ IMPLEMENTED: Conditional Spacing with `~`
+
+### Status
+
+The tilde (`~`) character acts as a **conditional space** that only appears when the adjacent variable has a value. This solves the common problem of unwanted trailing spaces when optional variables are empty.
+
+### How It Works
+
+- `~` before a variable creates a conditional space
+- The space **only appears** if the following variable has a non-empty value
+- If the variable is empty or missing, the `~` disappears entirely
+- Use `\~` to include a literal tilde character
+
+**Syntax:**
+
+```toml
+{var1}~{var2}  # Space only appears if var2 exists
+\~             # Literal tilde (escaped)
+```
+
+### Examples
+
+#### Basic Usage
+
+```toml
+[prompt]
+format = '{cwd}~{git_branch}'
+
+# With git:     /home/user main     ✅ One space
+# Without git:  /home/user          ✅ No trailing space
+```
+
+#### Multiple Conditional Spaces
+
+```toml
+[prompt]
+format = '{hostname}~{git_branch}~{cwd}'
+
+# All present:    laptop main /home/user      ✅ Two spaces
+# No git:         laptop /home/user           ✅ One space
+# Only cwd:       /home/user                  ✅ No extra spaces
+```
+
+#### Your Exact Use Case (Parenthesized Prompt)
+
+```toml
+[prompt]
+format = '-({time} {hostname} {cwd}~{git_branch})-'
+
+# With git branch:
+-(10:38:34 jeffjose2.mtv.corp.google.com /usr/local/google/home/jeffjose/scripts/twig main)-
+
+# Without git branch:
+-(10:38:02 jeffjose2.mtv.corp.google.com /usr/local/google/home/jeffjose/scripts)-
+                                                                                   ↑
+                                          No extra space before the )! Perfect alignment.
+```
+
+#### With Colors
+
+```toml
+[prompt]
+format = '{cwd:green}~{git_branch:yellow}~{git_dirty:red}'
+
+# The conditional space works seamlessly with colored variables
+```
+
+#### Literal Tilde
+
+```toml
+[prompt]
+format = '{cwd}\~{git_branch}'
+
+# Always renders: /home/user~/main
+#                          ↑ literal tilde, not conditional space
+```
+
+### Comparison with Regular Spaces
+
+```toml
+# Regular space (always present):
+format = '{cwd} {git_branch}'
+# Result without git: "/home/user "  ❌ trailing space
+
+# Conditional space (appears only if needed):
+format = '{cwd}~{git_branch}'
+# Result without git: "/home/user"   ✅ no trailing space
+```
+
+### Advanced Usage
+
+#### Combining with Literals
+
+```toml
+[prompt]
+format = '{\">>\":white}~{git_branch:yellow}~{cwd:green}'
+
+# With git:     >> main /home/user
+# Without git:  >> /home/user
+```
+
+#### Environment Variables
+
+```toml
+[prompt]
+format = '{hostname}~{$VIRTUAL_ENV}~{cwd}'
+
+# The ~ works with environment variables too!
+# Space only appears if $VIRTUAL_ENV is set and non-empty
+```
+
+### Why This Works Well
+
+✅ **Self-documenting**: You can see exactly where conditional spacing happens
+✅ **No surprises**: Behavior is explicit, not hidden magic
+✅ **Familiar**: Escape syntax (`\~`) is well-understood
+✅ **Minimal**: One character, one purpose
+✅ **Composable**: Works with colors, styles, literals, and environment variables
+
+### Implementation Details
+
+The `~` is processed **before** variable substitution, so it works at the template level:
+
+1. Template is scanned for `~` characters
+2. For each `~`, the following variable is identified
+3. If the variable has a value, `~` becomes a space
+4. If the variable is empty/missing, `~` disappears
+5. Then normal variable substitution happens with colors/styles
+
+This means `~` is completely transparent to the rest of the template system.
