@@ -14,6 +14,11 @@ impl ShellFormatter for TcshFormatter {
         // Wrap ANSI codes in %{...%}
         format!("%{{{}%}}{}%{{{}%}}", ansi_code, text, reset_code)
     }
+
+    fn finalize(&self, output: &str) -> String {
+        // TCSH needs literal \n instead of actual newline characters
+        output.replace('\n', "\\n")
+    }
 }
 
 #[cfg(test)]

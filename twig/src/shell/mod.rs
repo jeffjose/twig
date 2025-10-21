@@ -20,6 +20,20 @@ pub trait ShellFormatter {
     /// # Returns
     /// Formatted string with shell-specific wrapping around ANSI codes
     fn format_ansi(&self, ansi_code: &str, text: &str, reset_code: &str) -> String;
+
+    /// Post-process the final output string for shell-specific requirements
+    ///
+    /// For example, TCSH and Zsh need literal `\n` instead of actual newlines.
+    ///
+    /// # Arguments
+    /// * `output` - The complete formatted prompt string
+    ///
+    /// # Returns
+    /// Post-processed string ready for the shell
+    fn finalize(&self, output: &str) -> String {
+        // Default implementation: no post-processing
+        output.to_string()
+    }
 }
 
 /// Shell output modes

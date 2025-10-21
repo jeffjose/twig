@@ -174,6 +174,9 @@ fn main() {
 
     // Perform variable substitution with color support
     let output = substitute_variables(&config.prompt.format, &variables, formatter.as_ref());
+
+    // Post-process output for shell-specific requirements (e.g., escape newlines for TCSH/Zsh)
+    let output = formatter.finalize(&output);
     let render_time = render_start.elapsed();
 
     let total_time = start.elapsed();
