@@ -197,14 +197,14 @@ fn main() {
             total_time,
         );
     } else if (cli.debug || std::env::var("TWIG_DEBUG").is_ok()) && cli.mode.is_some() {
-        // Debug mode for shell integration: show debug info in plain text before prompt
+        // Debug mode for shell integration: show debug info to stderr, prompt to stdout
         // Enabled via --debug flag or TWIG_DEBUG environment variable
-        println!(
+        eprintln!(
             "Config: {} | Cache: {}",
             config_path.display(),
             cache_status
         );
-        println!(
+        eprintln!(
             "Timing: {:.2}ms total (config: {:.2}ms | render: {:.2}ms)",
             total_time.as_secs_f64() * 1000.0,
             config_time.as_secs_f64() * 1000.0,
