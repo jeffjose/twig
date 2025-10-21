@@ -1,4 +1,5 @@
 use chrono::Local;
+use clap::Parser;
 use directories::ProjectDirs;
 use gethostname::gethostname;
 use regex::Regex;
@@ -6,6 +7,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Instant;
+
+#[derive(Parser)]
+#[command(name = "twig")]
+#[command(about = "Shell prompt generator with daemon caching")]
+struct Cli {
+    /// Output only the prompt (for shell integration)
+    #[arg(long)]
+    prompt: bool,
+
+    /// Path to config file (default: ~/.config/twig/config.toml)
+    #[arg(long)]
+    config: Option<PathBuf>,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Config {
@@ -40,10 +55,17 @@ fn default_time_format() -> String {
 }
 
 fn main() {
+    let cli = Cli::parse();
+
+    let start = Instant::now();
+
     // Load config from file (or create default)
-    let config = load_config();
+    let config_start = Instant::now();
+    let (config, config_path) = load_config(cli.config.as_deref());
+    let config_time = config_start.elapsed();
 
     // Collect all variables
+    let render_start = Instant::now();
     let mut variables = HashMap::new();
 
     // Get current time with format from config
@@ -71,42 +93,101 @@ fn main() {
 
     // Perform variable substitution with color support
     let output = substitute_variables(&config.prompt.format, &variables);
+    let render_time = render_start.elapsed();
 
-    // Print it (no newline - this goes in a shell prompt)
-    print!("{}", output);
+    let total_time = start.elapsed();
+
+    // Output based on mode
+    if cli.prompt {
+        // Shell integration mode: just the prompt, no newline
+        print!("{}", output);
+    } else {
+        // Development/testing mode: boxed output with timing
+        print_boxed(&output, &config_path, config_time, render_time, total_time);
+    }
 }
 
-/// Load config from ~/.config/twig/config.toml
-/// Creates default config if it doesn't exist
-fn load_config() -> Config {
-    let config_path = get_config_path();
+/// Print the prompt in a box with timing information
+fn print_boxed(
+    prompt: &str,
+    config_path: &PathBuf,
+    config_time: std::time::Duration,
+    render_time: std::time::Duration,
+    total_time: std::time::Duration,
+) {
+    // Display config file path (dimmed)
+    println!("\x1b[2mConfig: {}\x1b[0m", config_path.display());
+    println!();
+
+    // Strip ANSI codes to measure actual text length
+    let text_only = strip_ansi_codes(prompt);
+    let width = text_only.len().max(50);
+
+    // Top border
+    println!("┌{}┐", "─".repeat(width + 2));
+
+    // Prompt content (with ANSI codes preserved)
+    println!("│ {}{} │", prompt, " ".repeat(width - text_only.len()));
+
+    // Bottom border
+    println!("└{}┘", "─".repeat(width + 2));
+
+    // Timing information (dimmed)
+    println!(
+        "\x1b[2mTiming: {:.2}ms total (config: {:.2}ms | render: {:.2}ms)\x1b[0m",
+        total_time.as_secs_f64() * 1000.0,
+        config_time.as_secs_f64() * 1000.0,
+        render_time.as_secs_f64() * 1000.0
+    );
+}
+
+/// Strip ANSI escape codes from a string to get actual text length
+fn strip_ansi_codes(s: &str) -> String {
+    let re = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    re.replace_all(s, "").to_string()
+}
+
+/// Load config from specified path or ~/.config/twig/config.toml
+/// Creates default config if it doesn't exist (only for default path)
+/// Returns (config, path_used)
+fn load_config(custom_path: Option<&std::path::Path>) -> (Config, PathBuf) {
+    let config_path = custom_path
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(get_config_path);
 
     // If config exists, load it
-    if config_path.exists() {
+    let config = if config_path.exists() {
         let contents = fs::read_to_string(&config_path)
             .expect("Failed to read config file");
 
         toml::from_str(&contents)
             .expect("Failed to parse config file")
     } else {
-        // Create default config and save it
-        let default_config = create_default_config();
+        // Only auto-create if using default path
+        if custom_path.is_none() {
+            // Create default config and save it
+            let default_config = create_default_config();
 
-        // Ensure parent directory exists
-        if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent)
-                .expect("Failed to create config directory");
+            // Ensure parent directory exists
+            if let Some(parent) = config_path.parent() {
+                fs::create_dir_all(parent)
+                    .expect("Failed to create config directory");
+            }
+
+            // Write default config
+            let toml_string = toml::to_string_pretty(&default_config)
+                .expect("Failed to serialize config");
+
+            fs::write(&config_path, toml_string)
+                .expect("Failed to write config file");
+
+            default_config
+        } else {
+            panic!("Config file not found: {}", config_path.display());
         }
+    };
 
-        // Write default config
-        let toml_string = toml::to_string_pretty(&default_config)
-            .expect("Failed to serialize config");
-
-        fs::write(&config_path, toml_string)
-            .expect("Failed to write config file");
-
-        default_config
-    }
+    (config, config_path)
 }
 
 /// Get config file path: ~/.config/twig/config.toml
