@@ -6,4 +6,5 @@ format = "%H:%M:%S"
 [cwd]
 
 [prompt]
-format = '{time:cyan} {"@":yellow,bold} {host:magenta} {dir:green} {"$":white,bold} '
+format = '''{time:cyan} {"@":yellow,bold} {host:magenta} {dir:green} 
+{"#":white,bold} '''

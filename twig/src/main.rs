@@ -119,18 +119,25 @@ fn print_boxed(
     println!("\x1b[2mConfig: {}\x1b[0m", config_path.display());
     println!();
 
-    // Strip ANSI codes to measure actual text length
-    let text_only = strip_ansi_codes(prompt);
-    let width = text_only.len().max(50);
+    // Split prompt into lines and strip ANSI codes from each
+    let lines: Vec<&str> = prompt.split('\n').collect();
+    let text_lines: Vec<String> = lines.iter().map(|line| strip_ansi_codes(line)).collect();
+
+    // Find the maximum width across all lines
+    let max_width = text_lines.iter().map(|line| line.len()).max().unwrap_or(0).max(50);
 
     // Top border
-    println!("┌{}┐", "─".repeat(width + 2));
+    println!("┌{}┐", "─".repeat(max_width + 2));
 
-    // Prompt content (with ANSI codes preserved)
-    println!("│ {}{} │", prompt, " ".repeat(width - text_only.len()));
+    // Print each line with proper padding
+    for (i, line) in lines.iter().enumerate() {
+        let text_len = text_lines[i].len();
+        let padding = " ".repeat(max_width - text_len);
+        println!("│ {}{} │", line, padding);
+    }
 
     // Bottom border
-    println!("└{}┘", "─".repeat(width + 2));
+    println!("└{}┘", "─".repeat(max_width + 2));
 
     // Timing information (dimmed)
     println!(
