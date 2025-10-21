@@ -1,0 +1,150 @@
+# Prompt
+
+# Debug timing - capture start time if PROMPT_DEBUG is set
+if ($?PROMPT_DEBUG) then
+    set prompt_start_time = `date +%s%3N`  # milliseconds since epoch
+endif
+
+    set     red="%{\033[1;31m%}"
+    set   green="%{\033[0;32m%}"
+    set  yellow="%{\033[1;33m%}"
+    set    blue="%{\033[1;34m%}"
+    set magenta="%{\033[1;35m%}"
+    set    cyan="%{\033[1;36m%}"
+    set   white="%{\033[0;37m%}"
+    set     end="%{\033[0m%}"    # This is needed at the end... :(
+
+    #set prompt='[%n@%m %B%c%b]%# '
+    set ellipsis
+
+#if(`where iwgetid` == "") then
+#    set WIFI = ""
+#else
+#    set WIFI = `iwgetid -r | tr ' ' '.' | tr '[A-Z]' '[a-z]' | sed 's/^@//g'`
+#endif
+
+
+if (${HOST} == "jeffjose-glaptop.roam.corp.google.com") then
+    set host_name = "glaptop"
+    set host_color = "${yellow}"
+else if (${HOST} == "jeffjose.mtv.corp.google.com") then
+    set host_name = "gworkstation"
+    set host_color = "${magenta}"
+else if (${HOST} == "nomad") then
+    set host_name = ${HOST}
+    set host_color = "${magenta}"
+else if (${HOST} == "skyfall") then
+    set host_name = ${HOST}
+    set host_color = "${magenta}"
+else
+    set host_color = "${yellow}"
+    set host_name = "${HOST}"
+endif
+
+set ip_address = `\ip -o route get 8.8.8.8 | awk -F 'src | uid' '{print $2}'`
+
+#if ("${WIFI}" == 'banana-unleashed') then
+#    set wifi_color = "${magenta}"
+#    set wifi_str = "@${WIFI}"
+#else if ("${WIFI}" == '') then
+#    set wifi_color = "${red}"
+#    set wifi_str = "offline"
+#else
+#    set wifi_color = "${yellow}"
+#    set wifi_str = "@${WIFI}"
+#endif
+
+# prodaccess status
+#
+if (${HOST} == "jeffjose.mtv.corp.google.com") then
+  if (-d /google/src/files) then
+    set prodaccess_status = true
+    set prompt_key = "#"
+  else
+    set prodaccess_status = false
+    set prompt_key = "(run prodaccess) #"
+  endif
+else
+  set prodaccess_status = true
+  set prompt_key = "#"
+endif
+
+# Git
+#
+if (`bash -c 'git rev-parse --git-dir 2> /dev/null'` != "") then
+
+  set git_status = `~/dotfiles/gitstatus.sh`
+
+  set git_branch    = $git_status[1]
+
+  if ($git_status[2] == '_NO_REMOTE_TRACKING_') then
+    set git_remote = ''
+  else
+    set git_remote = "$git_status[2]"
+  endif
+
+  if ($git_status[4] == 0) then
+    set git_staged = ''
+  else
+    set git_staged="+${git_status[4]}"
+  endif
+
+  if ($git_status[5] == 0) then
+    set git_conflicts = ''
+  else
+    set git_conflicts = "!!$git_status[5]"
+  endif
+
+  if ($git_status[6] == 0) then
+    set git_changed = ''
+  else
+    set git_changed="+${git_status[6]}"
+  endif
+
+  if ($git_status[7] == 0) then
+    set git_untracked = ''
+  else
+    set git_untracked="+${git_status[7]}"
+  endif
+
+  if ($git_status[8] == 0) then
+    set git_stashed = ''
+  else
+    set git_stashed = "+$git_status[8]"
+  endif
+
+  if ("$git_status[9]" == 0) then
+    set git_clean = ''
+  else
+    set git_clean="✔"
+  endif
+
+  if ("$git_status[10]" != "-") then
+    set git5_cl = "$git_status[10]"
+  else
+    set git5_cl = '-'
+  endif
+
+  set git_str = " ${magenta}${git_branch}${git_remote}${end}:${red}${git_untracked}${end}${yellow}${git_changed}${end}${blue}${git_staged}${end}${cyan}${git_stashed}${end}${green}${git_clean}${end}:${blue}${git5_cl}${end}"
+
+else
+  set git_str = ''
+endif
+
+
+# Firebase checks removed - no longer needed
+
+if ($?STY) then
+    set prompt = "-(${cyan}%B%P%b${end} ${host_color}${host_name} ${ip_address}${end} ${green}%B%/%b${green}${end}${git_str})-\n${prompt_key}${end} "
+else
+    set prompt = "-(${white}%P${end} ${white}${host_name} ${ip_address}${end} ${white}%/${end})-\n?${end} "
+endif
+
+# Debug timing - calculate and display elapsed time
+if ($?PROMPT_DEBUG) then
+    if ($?prompt_start_time) then
+        set prompt_end_time = `date +%s%3N`
+        @ prompt_elapsed = $prompt_end_time - $prompt_start_time
+        echo "Prompt took ${prompt_elapsed}ms"
+    endif
+endif
