@@ -10,6 +10,7 @@ Fast shell prompt generator with daemon caching and multi-shell support.
 - Multi-shell output (TCSH, Bash, Zsh)
 - Implicit section creation
 - Environment variable expansion
+- Git branch display with graceful degradation
 
 ## Installation
 
@@ -71,6 +72,7 @@ Sections are created automatically based on template variables.
 # Using {time} creates [time] section implicitly
 # Using {hostname} creates [hostname] section implicitly
 # Using {cwd} creates [cwd] section implicitly
+# Using {git} creates [git] section implicitly
 ```
 
 Override variable names:
@@ -79,6 +81,40 @@ Override variable names:
 [cwd]
 name = "dir"  # Use {dir} instead of {cwd}
 ```
+
+### Git Support
+
+Twig automatically displays the current git branch in your prompt!
+
+```toml
+[prompt]
+format = '{time:cyan} {git:yellow} {cwd:green} {"$":white,bold} '
+```
+
+No additional configuration needed - it just works:
+- **In a git repo**: Shows current branch name
+- **Outside a git repo**: Shows nothing (graceful degradation)
+- **Detached HEAD**: Shows "HEAD"
+- **Git not installed**: Shows nothing (no errors in normal mode)
+
+**Validation Mode**
+
+Check if git is working correctly:
+
+```bash
+twig --validate
+```
+
+Output:
+```
+✓ All providers validated successfully
+```
+
+If git is not installed or there are issues, validation mode will show detailed errors.
+
+**Future Enhancements** (not yet implemented):
+- Dirty status indicator (`git_dirty`)
+- Commits ahead/behind remote (`git_ahead`, `git_behind`)
 
 ## Shell Setup
 

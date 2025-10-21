@@ -1,6 +1,9 @@
+mod config;
+mod providers;
 mod shell;
 
 use chrono::Local;
+use config::{Config, CwdConfig, GitConfig, HostnameConfig, PromptConfig, TimeConfig};
 use clap::Parser;
 use directories::ProjectDirs;
 use gethostname::gethostname;
@@ -37,46 +40,10 @@ struct Cli {
     /// Show debug information before prompt (only with --mode). Can also use TWIG_DEBUG env var
     #[arg(long)]
     debug: bool,
-}
 
-#[derive(Debug, Deserialize, Serialize)]
-struct Config {
-    #[serde(default)]
-    time: Option<TimeConfig>,
-    #[serde(default)]
-    hostname: Option<HostnameConfig>,
-    #[serde(default)]
-    cwd: Option<CwdConfig>,
-    prompt: PromptConfig,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct TimeConfig {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default = "default_time_format")]
-    format: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct HostnameConfig {
-    #[serde(default)]
-    name: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct CwdConfig {
-    #[serde(default)]
-    name: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PromptConfig {
-    format: String,
-}
-
-fn default_time_format() -> String {
-    "%H:%M:%S".to_string()
+    /// Validate provider configurations and show any errors
+    #[arg(long)]
+    validate: bool,
 }
 
 fn main() {
@@ -88,69 +55,38 @@ fn main() {
     let config_start = Instant::now();
     let (mut config, config_path) = load_config(cli.config.as_deref());
 
-    // Discover variables from template and create implicit sections
-    let needed_vars = discover_variables(&config.prompt.format);
-    for var in needed_vars {
-        match var.as_str() {
-            "time" if config.time.is_none() => {
-                config.time = Some(TimeConfig {
-                    name: None,
-                    format: default_time_format(),
-                });
-            }
-            "hostname" if config.hostname.is_none() => {
-                config.hostname = Some(HostnameConfig { name: None });
-            }
-            "cwd" if config.cwd.is_none() => {
-                config.cwd = Some(CwdConfig { name: None });
-            }
-            _ => {} // Unknown variables or already configured
-        }
-    }
+    // Apply implicit sections for variables used in template
+    let format = config.prompt.format.clone();
+    apply_implicit_sections(&mut config, &format);
 
     let config_time = config_start.elapsed();
 
-    // Collect all variables
+    // Collect all variables from providers
     let render_start = Instant::now();
-    let mut variables = HashMap::new();
+    let registry = providers::ProviderRegistry::new();
 
-    // Get current time with format from config
-    if let Some(time_config) = &config.time {
-        let time = Local::now().format(&time_config.format).to_string();
-        let var_name = time_config.name.as_deref().unwrap_or("time");
-        variables.insert(var_name, time);
+    let variables = match registry.collect_all(&config, cli.validate) {
+        Ok(vars) => vars,
+        Err(e) if cli.validate => {
+            eprintln!("Provider error: {:?}", e);
+            std::process::exit(1);
+        }
+        Err(_) => HashMap::new(), // Should not happen - providers catch errors in non-validate mode
+    };
+
+    // If in validate mode, show success and exit
+    if cli.validate {
+        println!("✓ All providers validated successfully");
+        return;
     }
 
-    // Get hostname if configured
+    // Get cache status for debug display
     let cache_file = get_data_file_path();
     let cache_status = if cache_file.exists() {
         format!("{}", cache_file.display())
     } else {
         String::from("none")
     };
-
-    if let Some(hostname_config) = &config.hostname {
-        // Try to read from daemon cache first
-        let hostname = read_cached_hostname()
-            .map(|(host, _from_cache)| host)
-            .unwrap_or_else(|| {
-                gethostname()
-                    .to_string_lossy()
-                    .to_string()
-            });
-        let var_name = hostname_config.name.as_deref().unwrap_or("hostname");
-        variables.insert(var_name, hostname);
-    }
-
-    // Get current working directory if configured
-    if let Some(cwd_config) = &config.cwd {
-        let cwd = std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("?"))
-            .to_string_lossy()
-            .to_string();
-        let var_name = cwd_config.name.as_deref().unwrap_or("cwd");
-        variables.insert(var_name, cwd);
-    }
 
     // Determine shell mode and output format
     let (shell_mode, show_box) = if let Some(mode) = &cli.mode {
@@ -373,6 +309,7 @@ fn create_default_config() -> Config {
         }),
         hostname: Some(HostnameConfig { name: None }),
         cwd: Some(CwdConfig { name: None }),
+        git: None,
         prompt: PromptConfig {
             format: "{time:cyan} {\"@\":yellow,bold} {hostname:magenta} {cwd:green} {\"$\":white,bold} ".to_string(),
         },
@@ -389,7 +326,7 @@ fn create_default_config() -> Config {
 /// - {$ENV_VAR:color} - environment variable with color
 fn substitute_variables(
     template: &str,
-    variables: &HashMap<&str, String>,
+    variables: &HashMap<String, String>,
     formatter: &dyn ShellFormatter,
 ) -> String {
     // Match {anything} patterns
@@ -431,7 +368,7 @@ fn handle_literal(content: &str, formatter: &dyn ShellFormatter) -> String {
 /// Also handles environment variables: $VAR or $VAR:color
 fn handle_variable(
     content: &str,
-    variables: &HashMap<&str, String>,
+    variables: &HashMap<String, String>,
     formatter: &dyn ShellFormatter,
 ) -> String {
     // Parse: var or var:color or var:color,style
@@ -449,8 +386,8 @@ fn handle_variable(
         // Regular variable from config
         variables
             .get(var_name)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| var_name.to_string()) // Fallback to var name if not found
+            .cloned()
+            .unwrap_or_else(String::new) // Return empty string if variable not found
     };
 
     // Apply color/style if specified
@@ -547,6 +484,26 @@ fn discover_variables(template: &str) -> Vec<String> {
     }
 
     vars
+}
+
+/// Apply default configs for variables used in template but missing config sections
+fn apply_implicit_sections(config: &mut Config, template: &str) {
+    let registry = providers::ProviderRegistry::new();
+    let vars = discover_variables(template);
+
+    for var in vars {
+        let prefix = var.split('_').next().unwrap_or(&var);
+
+        if let Some(provider) = registry.get_by_section(prefix) {
+            let defaults = provider.default_config();
+
+            for (section_name, default_value) in defaults {
+                if !config.has_section(&section_name) {
+                    config.add_implicit_section(section_name, default_value);
+                }
+            }
+        }
+    }
 }
 
 /// Read cached hostname from daemon (if available and fresh)
