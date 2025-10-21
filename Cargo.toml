@@ -9,4 +9,9 @@ authors = ["Your Name"]
 license = "MIT"
 
 [workspace.dependencies]
-# Shared dependencies will go here as we build
+chrono = "0.4"
+gethostname = "0.4"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+directories = "5"
