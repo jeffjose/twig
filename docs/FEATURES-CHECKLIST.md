@@ -62,7 +62,7 @@
 ### Config File Basics
 - [x] TOML-based configuration
 - [x] Default location: `~/.config/twig/config.toml`
-- [ ] Custom config path via `--config` flag (not implemented yet)
+- [x] Custom config path via `--config` flag
 - [x] Auto-create default config on first run
 - [x] Auto-create config directory if needed
 
@@ -77,6 +77,12 @@
 - [x] Parse one `[hostname]` section
 - [x] Parse one `[cwd]` section
 - [x] Use `[prompt]` format string
+
+### Implicit Sections & Custom Names
+- [x] Implicit section creation from template variables
+- [x] Section name = variable name by default
+- [x] Optional `name` field to override variable name
+- [x] Template parsing to discover needed variables
 
 ### Error Handling
 - [x] Handle missing config file (auto-creates with defaults)
@@ -114,7 +120,27 @@
 
 ---
 
-## Phase 5: IP Address Provider
+## Phase 5: Git Provider
+
+**Goal**: Add git repository information (essential for modern prompts)
+
+### Basic Git Info
+- [ ] Detect if current directory is in a git repo
+- [ ] Get current branch name
+- [ ] Show when not in a git repo (empty string)
+- [ ] `[git]` config section
+
+### Git Status Indicators
+- [ ] Detect dirty/clean status (uncommitted changes)
+- [ ] Show ahead/behind remote status
+- [ ] Detect staged vs unstaged changes
+- [ ] Handle detached HEAD state
+
+**Deliverable**: Prompts can show git branch like `{git:yellow}` or `{git:red}` when dirty
+
+---
+
+## Phase 6: IP Address Provider
 
 **Goal**: Add network information
 
@@ -123,13 +149,13 @@
 - [ ] Get IPv6 addresses
 - [ ] Support specific interface selection (e.g., `eth0`, `wlan0`)
 - [ ] Handle missing/down interfaces gracefully
-- [ ] `[[ip]]` config section with optional `interface` field
+- [ ] `[ip]` config section with optional `interface` field
 
 **Deliverable**: Prompts can show IP address like `{ip:blue}`
 
 ---
 
-## Phase 6: CLI Interface & UX Polish
+## Phase 7: CLI Interface & UX Polish
 
 **Goal**: Better command-line experience
 
@@ -167,7 +193,21 @@
 
 ---
 
-## Phase 7: Advanced Configuration
+## Phase 8: Battery/Power Provider
+
+**Goal**: Add battery information
+
+### Basic Battery Info
+- [ ] Display battery percentage
+- [ ] Display charging status (Charging/Discharging/Full)
+- [ ] Gracefully handle systems without batteries
+- [ ] `[power]` config section
+
+**Deliverable**: Prompts can show battery like `{power:yellow}`
+
+---
+
+## Phase 9: Advanced Configuration
 
 **Goal**: Support complex configurations
 
@@ -192,7 +232,7 @@
 
 ---
 
-## Phase 8: Shell-Specific Output
+## Phase 10: Shell-Specific Output
 
 **Goal**: Work perfectly with different shells
 
@@ -212,15 +252,37 @@
 
 ---
 
-## Phase 9: Battery/Power Provider
+## Phase 11: Performance & Async Execution
 
-**Goal**: Show battery information
+**Goal**: Make it fast with parallel data fetching
 
-### Basic Battery Info
-- [ ] Display battery percentage
-- [ ] Display charging status (Charging/Discharging/Full)
-- [ ] Gracefully handle systems without batteries
-- [ ] `[[power]]` config section
+### Async Runtime
+- [ ] Add tokio dependency
+- [ ] Convert to async/await architecture
+- [ ] Async/concurrent data fetching
+- [ ] All providers run in parallel
+- [ ] Non-blocking architecture
+
+### Timing Analysis
+- [ ] `--timing` flag for performance breakdown
+- [ ] Show per-module fetch times
+- [ ] Show configuration load time
+- [ ] Show template processing time
+- [ ] Show total execution time breakdown
+- [ ] Tree-like visual output
+- [ ] Sort by slowest operations first
+- [ ] Output to stderr (don't pollute prompt)
+
+### Performance Goals
+- [ ] Fast execution (< 50ms typical)
+
+**Deliverable**: Blazing fast prompt generation with timing diagnostics
+
+---
+
+## Phase 12: Advanced Battery Info
+
+**Goal**: Detailed battery information
 
 ### Advanced Battery Info
 - [ ] Display time to full
@@ -258,35 +320,7 @@
 
 ---
 
-## Phase 10: Performance & Async Execution
-
-**Goal**: Make it fast with parallel data fetching
-
-### Async Runtime
-- [ ] Add tokio dependency
-- [ ] Convert to async/await architecture
-- [ ] Async/concurrent data fetching
-- [ ] All providers run in parallel
-- [ ] Non-blocking architecture
-
-### Timing Analysis
-- [ ] `--timing` flag for performance breakdown
-- [ ] Show per-module fetch times
-- [ ] Show configuration load time
-- [ ] Show template processing time
-- [ ] Show total execution time breakdown
-- [ ] Tree-like visual output
-- [ ] Sort by slowest operations first
-- [ ] Output to stderr (don't pollute prompt)
-
-### Performance Goals
-- [ ] Fast execution (< 50ms typical)
-
-**Deliverable**: Blazing fast prompt generation with timing diagnostics
-
----
-
-## Phase 11: Daemon System - Background Process
+## Phase 13: Daemon System - Background Process
 
 **Goal**: Start the daemon infrastructure
 
@@ -308,7 +342,7 @@
 
 ---
 
-## Phase 12: Daemon System - Caching
+## Phase 14: Daemon System - Caching
 
 **Goal**: Make daemon actually cache data
 
@@ -340,7 +374,7 @@
 
 ---
 
-## Phase 13: Deferred Sections (Advanced Caching)
+## Phase 15: Deferred Sections (Advanced Caching)
 
 **Goal**: Skip expensive operations unless explicitly needed
 
@@ -364,7 +398,7 @@
 
 ---
 
-## Phase 14: Platform Support & Polish
+## Phase 16: Platform Support & Polish
 
 **Goal**: Cross-platform compatibility
 
@@ -386,7 +420,7 @@
 
 ---
 
-## Phase 15: Documentation
+## Phase 17: Documentation
 
 **Goal**: Help users get started and troubleshoot
 
@@ -409,9 +443,11 @@
 
 ## Summary Stats
 
-- **Total Features**: ~150+
-- **Completed**: ~40 ✅
-- **Current Phase**: Phase 4 (Phases 1-3 complete!)
+- **Total Phases**: 17
+- **Completed Phases**: 3 (Phases 1-3 complete!)
+- **Partial Progress**: Phase 4 (environment variables done), Phase 13-14 (basic daemon done)
+- **Total Features**: ~160+
+- **Completed Features**: ~50 ✅
 
 ---
 
@@ -437,11 +473,26 @@
 ### ✅ Phase 3 Complete!
 - [x] TOML-based configuration
 - [x] Default location: `~/.config/twig/config.toml`
+- [x] Custom config path via `--config` flag
 - [x] Auto-create default config
 - [x] Config sections: [time], [hostname], [cwd], [prompt]
 - [x] Parse and apply config
+- [x] Implicit section creation from template
+- [x] Section name = variable name (no magic)
+- [x] Optional name field to override variable names
 
-### 🎯 Next Steps
-Phase 4: Enhanced Data Providers (env vars, configurable time formats, etc.)
-Phase 5: IP Address Provider
-Phase 6: CLI Interface (--help, --config, --validate, --colors)
+### 🔨 Phase 4 In Progress
+- [x] Environment variables (`{$USER}`, `{$HOME}`, etc.)
+- [ ] CWD enhancements (shorten, etc.)
+- [ ] Time format validation
+- [ ] Timezone support
+
+### 🎯 Next Steps (Breadth-First Approach)
+
+**Missing Moving Pieces** (core architectural components):
+1. **Git Provider** (Phase 5) - Branch name, dirty status
+2. **IP Provider** (Phase 6) - Basic IPv4/IPv6
+3. **CLI Interface** (Phase 7) - --help, --version, --colors
+4. **Battery Provider** (Phase 8) - Basic percentage and status
+
+**Recommendation**: Implement the missing data providers first (git, ip, battery) to get all the core moving pieces in place, then polish the CLI interface.
