@@ -28,5 +28,5 @@
 # name = "dir"  # use {dir} instead of {cwd}
 
 [prompt]
-format = '''{time:cyan} {$USER:bright_green,bold}@{hostname:magenta} {cwd:green}
+format = '''{time:cyan} {$USER:bright_green,bold}@{hostname:magenta} {cwd:green} {git:yellow}
 {"$":white,bold} '''
