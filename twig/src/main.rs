@@ -56,13 +56,13 @@ fn main() {
     let render_start = Instant::now();
     let registry = providers::ProviderRegistry::new();
 
-    let variables = match registry.collect_all(&config, cli.validate) {
-        Ok(vars) => vars,
+    let (variables, provider_timings) = match registry.collect_all(&config, cli.validate) {
+        Ok(result) => (result.variables, result.timings),
         Err(e) if cli.validate => {
             eprintln!("Provider error: {:?}", e);
             std::process::exit(1);
         }
-        Err(_) => HashMap::new(), // Should not happen - providers catch errors in non-validate mode
+        Err(_) => (HashMap::new(), Vec::new()), // Should not happen - providers catch errors in non-validate mode
     };
 
     // If in validate mode, show success and exit
@@ -113,11 +113,12 @@ fn main() {
             config_time,
             render_time,
             total_time,
+            &provider_timings,
         );
     } else if (cli.debug || std::env::var("TWIG_DEBUG").is_ok()) && cli.mode.is_some() {
         // Debug mode for shell integration: show debug info to stderr, prompt to stdout
         // Enabled via --debug flag or TWIG_DEBUG environment variable
-        print_debug_box(&config_path, config_time, render_time, total_time);
+        print_debug_box(&config_path, config_time, render_time, total_time, &provider_timings);
         print!("{}", output);
     } else {
         // Shell integration or prompt mode: just the prompt, no newline
@@ -132,6 +133,7 @@ fn print_boxed(
     config_time: std::time::Duration,
     render_time: std::time::Duration,
     total_time: std::time::Duration,
+    provider_timings: &[providers::ProviderTiming],
 ) {
     // Display config file path (dimmed)
     println!("\x1b[2mConfig: {}\x1b[0m", config_path.display());
@@ -164,6 +166,15 @@ fn print_boxed(
         config_time.as_secs_f64() * 1000.0,
         render_time.as_secs_f64() * 1000.0
     );
+
+    // Provider timing breakdown (dimmed)
+    if !provider_timings.is_empty() {
+        let provider_times: Vec<String> = provider_timings
+            .iter()
+            .map(|t| format!("{}: {:.2}ms", t.name, t.duration.as_secs_f64() * 1000.0))
+            .collect();
+        println!("\x1b[2m        {}\x1b[0m", provider_times.join(" | "));
+    }
 }
 
 /// Print debug information in a classy box to stderr
@@ -172,6 +183,7 @@ fn print_debug_box(
     config_time: std::time::Duration,
     render_time: std::time::Duration,
     total_time: std::time::Duration,
+    provider_timings: &[providers::ProviderTiming],
 ) {
     let config_str = format!("📄 Config: {}", config_path.display());
     let timing_str = format!(
@@ -180,6 +192,12 @@ fn print_debug_box(
         config_time.as_secs_f64() * 1000.0,
         render_time.as_secs_f64() * 1000.0
     );
+
+    // Build provider timing strings
+    let provider_strs: Vec<String> = provider_timings
+        .iter()
+        .map(|t| format!("   {}: {:.2}ms", t.name, t.duration.as_secs_f64() * 1000.0))
+        .collect();
 
     // Calculate display width (accounting for emoji being 2 chars wide)
     // Each line has 1 emoji (2 char width) but counts as more bytes
@@ -192,7 +210,12 @@ fn print_debug_box(
 
     let config_width = display_width(&config_str);
     let timing_width = display_width(&timing_str);
-    let max_width = config_width.max(timing_width).max(40);
+
+    // Calculate widths for provider timings
+    let provider_widths: Vec<usize> = provider_strs.iter().map(|s| display_width(s)).collect();
+    let max_provider_width = provider_widths.iter().max().copied().unwrap_or(0);
+
+    let max_width = config_width.max(timing_width).max(max_provider_width).max(40);
 
     // Top border (account for emoji in header)
     let header = "┌─ 🔍 twig debug ";
@@ -200,12 +223,12 @@ fn print_debug_box(
     eprintln!("{}{}┐", header, "─".repeat(max_width + 2 - header_width));
 
     // Content lines
-    for (line, width) in [
-        (&config_str, config_width),
-        (&timing_str, timing_width),
-    ] {
-        let padding = " ".repeat(max_width - width);
-        eprintln!("│ {}{} │", line, padding);
+    eprintln!("│ {}{} │", config_str, " ".repeat(max_width - config_width));
+    eprintln!("│ {}{} │", timing_str, " ".repeat(max_width - timing_width));
+
+    // Provider timing lines
+    for (provider_str, width) in provider_strs.iter().zip(provider_widths.iter()) {
+        eprintln!("│ {}{} │", provider_str, " ".repeat(max_width - width));
     }
 
     // Bottom border

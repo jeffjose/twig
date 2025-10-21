@@ -6,6 +6,7 @@ pub mod git;
 use crate::config::Config;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -23,6 +24,19 @@ pub enum ProviderError {
 }
 
 pub type ProviderResult<T> = Result<T, ProviderError>;
+
+/// Timing information for provider execution
+#[derive(Debug, Clone)]
+pub struct ProviderTiming {
+    pub name: String,
+    pub duration: Duration,
+}
+
+/// Result of collecting variables from all providers
+pub struct CollectResult {
+    pub variables: HashMap<String, String>,
+    pub timings: Vec<ProviderTiming>,
+}
 
 /// Trait for data providers that contribute variables to prompts
 pub trait Provider {
@@ -181,19 +195,28 @@ impl ProviderRegistry {
     /// * `validate` - If true, providers return errors instead of empty values
     ///
     /// # Returns
-    /// Result with HashMap of all variables or first error encountered
-    pub fn collect_all(&self, config: &Config, validate: bool) -> ProviderResult<HashMap<String, String>> {
+    /// Result with CollectResult containing variables and timing data, or first error encountered
+    pub fn collect_all(&self, config: &Config, validate: bool) -> ProviderResult<CollectResult> {
         let mut variables = HashMap::new();
+        let mut timings = Vec::new();
 
         for provider in self.providers.values() {
+            let start = Instant::now();
             match provider.collect(config, validate) {
-                Ok(vars) => variables.extend(vars),
+                Ok(vars) => {
+                    let duration = start.elapsed();
+                    timings.push(ProviderTiming {
+                        name: provider.name().to_string(),
+                        duration,
+                    });
+                    variables.extend(vars);
+                }
                 Err(e) if validate => return Err(e),
                 Err(_) => {} // Silent failure in non-validate mode
             }
         }
 
-        Ok(variables)
+        Ok(CollectResult { variables, timings })
     }
 
     /// Collect variables from specific providers only
