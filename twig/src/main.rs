@@ -199,17 +199,7 @@ fn main() {
     } else if (cli.debug || std::env::var("TWIG_DEBUG").is_ok()) && cli.mode.is_some() {
         // Debug mode for shell integration: show debug info to stderr, prompt to stdout
         // Enabled via --debug flag or TWIG_DEBUG environment variable
-        eprintln!(
-            "Config: {} | Cache: {}",
-            config_path.display(),
-            cache_status
-        );
-        eprintln!(
-            "Timing: {:.2}ms total (config: {:.2}ms | render: {:.2}ms)",
-            total_time.as_secs_f64() * 1000.0,
-            config_time.as_secs_f64() * 1000.0,
-            render_time.as_secs_f64() * 1000.0
-        );
+        print_debug_box(&config_path, &cache_status, config_time, render_time, total_time);
         print!("{}", output);
     } else {
         // Shell integration or prompt mode: just the prompt, no newline
@@ -257,6 +247,56 @@ fn print_boxed(
         config_time.as_secs_f64() * 1000.0,
         render_time.as_secs_f64() * 1000.0
     );
+}
+
+/// Print debug information in a classy box to stderr
+fn print_debug_box(
+    config_path: &PathBuf,
+    cache_status: &str,
+    config_time: std::time::Duration,
+    render_time: std::time::Duration,
+    total_time: std::time::Duration,
+) {
+    let config_str = format!("📄 Config: {}", config_path.display());
+    let cache_str = format!("💾 Cache:  {}", cache_status);
+    let timing_str = format!(
+        "⏱️  Timing: {:.2}ms (config: {:.2}ms | render: {:.2}ms)",
+        total_time.as_secs_f64() * 1000.0,
+        config_time.as_secs_f64() * 1000.0,
+        render_time.as_secs_f64() * 1000.0
+    );
+
+    // Calculate display width (accounting for emoji being 2 chars wide)
+    // Each line has 1 emoji (2 char width) but counts as more bytes
+    let display_width = |s: &str| {
+        // Count chars but emojis display as 2 wide
+        let char_count = s.chars().count();
+        let emoji_count = s.chars().filter(|c| *c as u32 > 0x1F000).count();
+        char_count + emoji_count // Add extra width for emojis
+    };
+
+    let config_width = display_width(&config_str);
+    let cache_width = display_width(&cache_str);
+    let timing_width = display_width(&timing_str);
+    let max_width = config_width.max(cache_width).max(timing_width).max(40);
+
+    // Top border (account for emoji in header)
+    let header = "┌─ 🔍 twig debug ";
+    let header_width = display_width(header);
+    eprintln!("{}{}┐", header, "─".repeat(max_width + 2 - header_width));
+
+    // Content lines
+    for (line, width) in [
+        (&config_str, config_width),
+        (&cache_str, cache_width),
+        (&timing_str, timing_width),
+    ] {
+        let padding = " ".repeat(max_width - width);
+        eprintln!("│ {}{} │", line, padding);
+    }
+
+    // Bottom border
+    eprintln!("└{}┘", "─".repeat(max_width + 2));
 }
 
 /// Strip ANSI escape codes from a string to get actual text length
