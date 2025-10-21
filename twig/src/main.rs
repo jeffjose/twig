@@ -1,9 +1,12 @@
+mod shell;
+
 use chrono::Local;
 use clap::Parser;
 use directories::ProjectDirs;
 use gethostname::gethostname;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use shell::{get_formatter, ShellFormatter, ShellMode};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -26,6 +29,10 @@ struct Cli {
     /// Path to config file (default: ~/.config/twig/config.toml)
     #[arg(long)]
     config: Option<PathBuf>,
+
+    /// Shell output mode (tcsh, bash, zsh) - outputs shell-specific prompt format
+    #[arg(long, value_name = "SHELL")]
+    mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -141,19 +148,50 @@ fn main() {
         variables.insert(var_name, cwd);
     }
 
+    // Determine shell mode and output format
+    let (shell_mode, show_box) = if let Some(mode) = &cli.mode {
+        // --mode flag: use specified shell formatter, no box
+        let mode = match mode.as_str() {
+            "tcsh" => ShellMode::Tcsh,
+            "bash" => ShellMode::Bash,
+            "zsh" => ShellMode::Zsh,
+            other => {
+                eprintln!("Unknown shell mode: {}. Valid options: tcsh, bash, zsh", other);
+                std::process::exit(1);
+            }
+        };
+        (mode, false)
+    } else if cli.prompt {
+        // --prompt flag: raw ANSI codes, no box
+        (ShellMode::Raw, false)
+    } else {
+        // Default: raw ANSI codes, show box
+        (ShellMode::Raw, true)
+    };
+
+    // Create formatter for the selected shell mode
+    let formatter = get_formatter(shell_mode);
+
     // Perform variable substitution with color support
-    let output = substitute_variables(&config.prompt.format, &variables);
+    let output = substitute_variables(&config.prompt.format, &variables, formatter.as_ref());
     let render_time = render_start.elapsed();
 
     let total_time = start.elapsed();
 
-    // Output based on mode
-    if cli.prompt {
+    // Output based on show_box flag
+    if show_box {
+        // Development/testing mode: boxed output with timing
+        print_boxed(
+            &output,
+            &config_path,
+            &cache_status,
+            config_time,
+            render_time,
+            total_time,
+        );
+    } else {
         // Shell integration mode: just the prompt, no newline
         print!("{}", output);
-    } else {
-        // Development/testing mode: boxed output with timing
-        print_boxed(&output, &config_path, &cache_status, config_time, render_time, total_time);
     }
 }
 
@@ -287,7 +325,11 @@ fn create_default_config() -> Config {
 /// - {"text":color} - literal text with color
 /// - {$ENV_VAR} - environment variable
 /// - {$ENV_VAR:color} - environment variable with color
-fn substitute_variables(template: &str, variables: &HashMap<&str, String>) -> String {
+fn substitute_variables(
+    template: &str,
+    variables: &HashMap<&str, String>,
+    formatter: &dyn ShellFormatter,
+) -> String {
     // Match {anything} patterns
     let re = Regex::new(r"\{([^}]+)\}").unwrap();
 
@@ -296,16 +338,17 @@ fn substitute_variables(template: &str, variables: &HashMap<&str, String>) -> St
 
         // Check if it's a literal: "text":color
         if content.starts_with('"') {
-            return handle_literal(content);
+            return handle_literal(content, formatter);
         }
 
         // Otherwise it's a variable: var or var:color or var:color,style
-        handle_variable(content, variables)
-    }).to_string()
+        handle_variable(content, variables, formatter)
+    })
+    .to_string()
 }
 
 /// Handle literal text: "text":color or "text":color,style
-fn handle_literal(content: &str) -> String {
+fn handle_literal(content: &str, formatter: &dyn ShellFormatter) -> String {
     // Parse: "text":color or "text":color,style
     if let Some(colon_pos) = content.find(':') {
         let text_part = &content[..colon_pos];
@@ -315,7 +358,7 @@ fn handle_literal(content: &str) -> String {
         let text = text_part.trim_matches('"');
 
         // Apply color/style
-        colorize(text, style_part)
+        colorize(text, style_part, formatter)
     } else {
         // No color specified, just remove quotes
         content.trim_matches('"').to_string()
@@ -324,7 +367,11 @@ fn handle_literal(content: &str) -> String {
 
 /// Handle variable: var or var:color or var:color,style
 /// Also handles environment variables: $VAR or $VAR:color
-fn handle_variable(content: &str, variables: &HashMap<&str, String>) -> String {
+fn handle_variable(
+    content: &str,
+    variables: &HashMap<&str, String>,
+    formatter: &dyn ShellFormatter,
+) -> String {
     // Parse: var or var:color or var:color,style
     let parts: Vec<&str> = content.split(':').collect();
 
@@ -335,18 +382,18 @@ fn handle_variable(content: &str, variables: &HashMap<&str, String>) -> String {
     let value = if var_name.starts_with('$') {
         // Environment variable: {$USER}, {$HOME}, etc.
         let env_var = &var_name[1..]; // Strip the '$'
-        std::env::var(env_var)
-            .unwrap_or_else(|_| String::new()) // Empty string if not found
+        std::env::var(env_var).unwrap_or_else(|_| String::new()) // Empty string if not found
     } else {
         // Regular variable from config
-        variables.get(var_name)
+        variables
+            .get(var_name)
             .map(|s| s.to_string())
             .unwrap_or_else(|| var_name.to_string()) // Fallback to var name if not found
     };
 
     // Apply color/style if specified
     if let Some(style) = style_spec {
-        colorize(&value, style)
+        colorize(&value, style, formatter)
     } else {
         value
     }
@@ -354,7 +401,7 @@ fn handle_variable(content: &str, variables: &HashMap<&str, String>) -> String {
 
 /// Apply ANSI color and style codes to text
 /// style_spec can be: "color" or "color,style" or "color,style1,style2"
-fn colorize(text: &str, style_spec: &str) -> String {
+fn colorize(text: &str, style_spec: &str, formatter: &dyn ShellFormatter) -> String {
     let parts: Vec<&str> = style_spec.split(',').map(|s| s.trim()).collect();
 
     let mut codes = Vec::new();
@@ -369,8 +416,12 @@ fn colorize(text: &str, style_spec: &str) -> String {
         // No valid codes, return text as-is
         text.to_string()
     } else {
-        // Apply codes: \x1b[code1;code2;...m text \x1b[0m
-        format!("\x1b[{}m{}\x1b[0m", codes.join(";"), text)
+        // Build ANSI codes
+        let ansi_code = format!("\x1b[{}m", codes.join(";"));
+        let reset_code = "\x1b[0m";
+
+        // Use formatter to wrap codes appropriately for the shell
+        formatter.format_ansi(&ansi_code, text, reset_code)
     }
 }
 

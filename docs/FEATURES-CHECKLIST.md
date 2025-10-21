@@ -237,25 +237,28 @@
 **Goal**: Work perfectly with different shells
 
 ### Shell Modes
-- [x] Standard ANSI escape codes (bash, zsh, fish) - current default
-- [ ] TCSH-specific formatting with `%{...%}` wrapping
-- [ ] Mode selection via `--mode` flag
-- [ ] Proper ANSI code wrapping per line
-- [ ] Extensible architecture for future shell support
+- [x] Standard ANSI escape codes (raw mode, default)
+- [x] TCSH-specific formatting with `%{...%}` wrapping
+- [x] Bash-specific formatting with `\[...\]` wrapping
+- [x] Zsh-specific formatting with `%{...%}` wrapping
+- [x] Mode selection via `--mode` flag
+- [x] Proper ANSI code wrapping per line
+- [x] Extensible architecture for future shell support
 
 ### Shell Integration
-- [x] Works with bash (default)
-- [ ] Works with zsh (default should work)
-- [ ] Works with fish (default should work)
-- [ ] Works with tcsh (needs `--mode tcsh`)
+- [x] Works with bash (use `--mode bash`)
+- [x] Works with zsh (use `--mode zsh`)
+- [x] Works with fish (use `--prompt` for raw ANSI)
+- [x] Works with tcsh (use `--mode tcsh`)
 
 ### Architecture
-- [ ] Shell output formatter abstraction
-- [ ] Separate module per shell (tcsh.rs, bash.rs, etc.)
-- [ ] Factory pattern for shell mode selection
-- [ ] `--mode` flag takes priority over `--prompt`
+- [x] Shell output formatter abstraction (ShellFormatter trait)
+- [x] Separate module per shell (shell/raw.rs, bash.rs, zsh.rs, tcsh.rs)
+- [x] Factory pattern for shell mode selection (get_formatter)
+- [x] `--mode` flag controls shell-specific output format
+- [x] Flag behavior: twig (boxed), --prompt (raw), --mode <shell> (shell-specific)
 
-**Deliverable**: `twig --mode tcsh` outputs tcsh-compatible prompt with `%{...%}` wrapped ANSI codes
+**Deliverable**: ✅ `twig --mode tcsh` outputs tcsh-compatible prompt with `%{...%}` wrapped ANSI codes
 
 ---
 
@@ -451,10 +454,10 @@
 ## Summary Stats
 
 - **Total Phases**: 17
-- **Completed Phases**: 3 (Phases 1-3 complete!)
+- **Completed Phases**: 4 (Phases 1-3, 10 complete!)
 - **Partial Progress**: Phase 4 (environment variables done), Phase 13-14 (basic daemon done)
 - **Total Features**: ~160+
-- **Completed Features**: ~50 ✅
+- **Completed Features**: ~65 ✅
 
 ---
 
@@ -494,19 +497,26 @@
 - [ ] Time format validation
 - [ ] Timezone support
 
-### 🔨 Phase 10 In Progress (Shell-Specific Output)
-- [ ] TCSH formatter with `%{...%}` wrapping
-- [ ] `--mode` flag (tcsh, bash, zsh)
-- [ ] Extensible shell formatter architecture
-- [ ] Separate modules for future shells
+### ✅ Phase 10 Complete! (Shell-Specific Output)
+- [x] TCSH formatter with `%{...%}` wrapping
+- [x] Bash formatter with `\[...\]` wrapping
+- [x] Zsh formatter with `%{...%}` wrapping
+- [x] Raw formatter for `--prompt` flag
+- [x] `--mode` flag (tcsh, bash, zsh)
+- [x] Extensible shell formatter architecture
+- [x] Separate modules (shell/raw.rs, bash.rs, zsh.rs, tcsh.rs)
+
+### ✅ Phase 10 Complete!
+- [x] Shell-specific ANSI wrapping (TCSH, Bash, Zsh, Raw)
+- [x] `--mode` flag for shell selection
+- [x] Extensible ShellFormatter architecture
 
 ### 🎯 Next Steps (Breadth-First Approach)
 
 **Missing Moving Pieces** (core architectural components):
-1. **Shell Output Formatting** (Phase 10) - **IN PROGRESS** - TCSH support
-2. **Git Provider** (Phase 5) - Branch name, dirty status
-3. **IP Provider** (Phase 6) - Basic IPv4/IPv6
-4. **CLI Interface** (Phase 7) - --help, --version, --colors
-5. **Battery Provider** (Phase 8) - Basic percentage and status
+1. **Git Provider** (Phase 5) - Branch name, dirty status
+2. **IP Provider** (Phase 6) - Basic IPv4/IPv6
+3. **CLI Interface** (Phase 7) - --help, --version, --colors
+4. **Battery Provider** (Phase 8) - Basic percentage and status
 
-**Current Focus**: TCSH shell support to establish shell-agnostic output architecture.
+**Current Focus**: Git provider would be the most valuable next addition for shell prompts.
