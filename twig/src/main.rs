@@ -9,6 +9,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
+#[derive(Debug, Serialize, Deserialize)]
+struct CachedData {
+    hostname: String,
+    timestamp: u64,
+}
+
 #[derive(Parser)]
 #[command(name = "twig")]
 #[command(about = "Shell prompt generator with daemon caching")]
@@ -75,10 +81,22 @@ fn main() {
     }
 
     // Get hostname if configured
+    let cache_file = get_data_file_path();
+    let cache_status = if cache_file.exists() {
+        format!("{}", cache_file.display())
+    } else {
+        String::from("none")
+    };
+
     if config.hostname.is_some() {
-        let hostname = gethostname()
-            .to_string_lossy()
-            .to_string();
+        // Try to read from daemon cache first
+        let hostname = read_cached_hostname()
+            .map(|(host, _from_cache)| host)
+            .unwrap_or_else(|| {
+                gethostname()
+                    .to_string_lossy()
+                    .to_string()
+            });
         variables.insert("host", hostname);
     }
 
@@ -103,7 +121,7 @@ fn main() {
         print!("{}", output);
     } else {
         // Development/testing mode: boxed output with timing
-        print_boxed(&output, &config_path, config_time, render_time, total_time);
+        print_boxed(&output, &config_path, &cache_status, config_time, render_time, total_time);
     }
 }
 
@@ -111,12 +129,13 @@ fn main() {
 fn print_boxed(
     prompt: &str,
     config_path: &PathBuf,
+    cache_status: &str,
     config_time: std::time::Duration,
     render_time: std::time::Duration,
     total_time: std::time::Duration,
 ) {
-    // Display config file path (dimmed)
-    println!("\x1b[2mConfig: {}\x1b[0m", config_path.display());
+    // Display config file path and cache status (dimmed, on one line)
+    println!("\x1b[2mConfig: {} | Cache: {}\x1b[0m", config_path.display(), cache_status);
     println!();
 
     // Split prompt into lines and strip ANSI codes from each
@@ -233,6 +252,8 @@ fn create_default_config() -> Config {
 /// - {var:color} - variable with color
 /// - {var:color,style} - variable with color and style
 /// - {"text":color} - literal text with color
+/// - {$ENV_VAR} - environment variable
+/// - {$ENV_VAR:color} - environment variable with color
 fn substitute_variables(template: &str, variables: &HashMap<&str, String>) -> String {
     // Match {anything} patterns
     let re = Regex::new(r"\{([^}]+)\}").unwrap();
@@ -269,6 +290,7 @@ fn handle_literal(content: &str) -> String {
 }
 
 /// Handle variable: var or var:color or var:color,style
+/// Also handles environment variables: $VAR or $VAR:color
 fn handle_variable(content: &str, variables: &HashMap<&str, String>) -> String {
     // Parse: var or var:color or var:color,style
     let parts: Vec<&str> = content.split(':').collect();
@@ -277,15 +299,23 @@ fn handle_variable(content: &str, variables: &HashMap<&str, String>) -> String {
     let style_spec = parts.get(1).copied();
 
     // Get variable value
-    let value = variables.get(var_name)
-        .map(|s| s.as_str())
-        .unwrap_or(var_name); // Fallback to var name if not found
+    let value = if var_name.starts_with('$') {
+        // Environment variable: {$USER}, {$HOME}, etc.
+        let env_var = &var_name[1..]; // Strip the '$'
+        std::env::var(env_var)
+            .unwrap_or_else(|_| String::new()) // Empty string if not found
+    } else {
+        // Regular variable from config
+        variables.get(var_name)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| var_name.to_string()) // Fallback to var name if not found
+    };
 
     // Apply color/style if specified
     if let Some(style) = style_spec {
-        colorize(value, style)
+        colorize(&value, style)
     } else {
-        value.to_string()
+        value
     }
 }
 
@@ -342,4 +372,51 @@ fn get_ansi_code(name: &str) -> Option<&'static str> {
 
         _ => None,
     }
+}
+
+/// Read cached hostname from daemon (if available and fresh)
+/// Returns (hostname, from_cache) or None if cache is missing, stale, or invalid
+fn read_cached_hostname() -> Option<(String, bool)> {
+    let data_path = get_data_file_path();
+
+    // Try to read cache file
+    let contents = fs::read_to_string(&data_path).ok()?;
+
+    // Parse JSON
+    let cached: CachedData = serde_json::from_str(&contents).ok()?;
+
+    // Check if cache is fresh (less than 5 seconds old)
+    let current_time = current_timestamp();
+    let age = current_time.saturating_sub(cached.timestamp);
+
+    if age < 5 {
+        Some((cached.hostname, true)) // from cache
+    } else {
+        None // Cache is stale
+    }
+}
+
+/// Get data file path: ~/.local/share/twig/data.json
+fn get_data_file_path() -> PathBuf {
+    if let Some(proj_dirs) = ProjectDirs::from("", "", "twig") {
+        proj_dirs.data_dir().join("data.json")
+    } else {
+        // Fallback to ~/.local/share/twig/data.json
+        let mut path = std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."));
+        path.push(".local");
+        path.push("share");
+        path.push("twig");
+        path.push("data.json");
+        path
+    }
+}
+
+/// Get current Unix timestamp
+fn current_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_secs()
 }

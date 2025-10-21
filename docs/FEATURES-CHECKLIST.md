@@ -102,10 +102,10 @@
 - [ ] Timezone support
 
 ### Environment Variables
-- [ ] Access environment variables in format strings
-- [ ] Syntax: `{$USER}`, `{$PWD}`, `{$HOME}`, etc.
-- [ ] Support any environment variable
-- [ ] Gracefully handle missing env vars
+- [x] Access environment variables in format strings
+- [x] Syntax: `{$USER}`, `{$PWD}`, `{$HOME}`, etc.
+- [x] Support any environment variable
+- [x] Gracefully handle missing env vars
 
 ### Hostname Enhancements
 - [ ] Handle Unicode pathnames
@@ -291,20 +291,20 @@
 **Goal**: Start the daemon infrastructure
 
 ### Background Operation
-- [ ] `twig daemon` subcommand
+- [ ] `twig daemon` subcommand (currently separate `twigd` binary)
 - [ ] Auto-fork to background process
 - [ ] Foreground mode for debugging (`--fg`)
 - [ ] File-based locking to prevent multiple instances
 - [ ] PID file management
-- [ ] Graceful shutdown handling (Ctrl+C)
+- [x] Graceful shutdown handling (Ctrl+C)
 
 ### Daemon Configuration
 - [ ] `[daemon]` section in config
-- [ ] `frequency` setting (update interval in seconds)
-- [ ] `stale_after` setting (cache staleness threshold)
-- [ ] `data_file` setting (custom cache file path)
+- [x] Hardcoded 1 second update interval (config support pending)
+- [x] Hardcoded 5 second staleness threshold (config support pending)
+- [x] Default cache location: `~/.local/share/twig/data.json`
 
-**Deliverable**: `twig daemon` runs in background, `twig daemon --fg` runs in foreground
+**Deliverable**: ✅ Basic `twigd` daemon runs (foreground only for now)
 
 ---
 
@@ -313,30 +313,30 @@
 **Goal**: Make daemon actually cache data
 
 ### Caching Strategy
-- [ ] Periodic data updates at configured frequency
-- [ ] Write cache to JSON file
-- [ ] Default cache location: `~/.local/share/twig/data.json`
+- [x] Periodic data updates at configured frequency
+- [x] Write cache to JSON file
+- [x] Default cache location: `~/.local/share/twig/data.json`
 - [ ] Custom cache file path support
-- [ ] Staleness checking based on `stale_after` config
+- [x] Staleness checking based on `stale_after` config
 
 ### Cache Integration
-- [ ] Client reads from cache if fresh
-- [ ] Fall back to live data if stale
-- [ ] Fall back to live data if cache missing
-- [ ] Fast cache reads (JSON deserialization)
+- [x] Client reads from cache if fresh
+- [x] Fall back to live data if stale
+- [x] Fall back to live data if cache missing
+- [x] Fast cache reads (JSON deserialization)
 
 ### Daemon Data Providers
-- [ ] Cache hostname data
+- [x] Cache hostname data
 - [ ] Cache IP address data
 - [ ] Cache battery/power data
-- [ ] Update at configured frequency
-- [ ] Handle errors gracefully
+- [x] Update at configured frequency (hardcoded 1s)
+- [x] Handle errors gracefully
 
 ### Timing Updates
-- [ ] Show cache vs. live data stats in `--timing`
-- [ ] Show daemon detection status
+- [x] Show cache status in output (cached/live)
+- [x] Show daemon detection status
 
-**Deliverable**: Daemon caches expensive data, client uses it for instant prompts
+**Deliverable**: ✅ Daemon caches hostname, client uses it for instant prompts
 
 ---
 

@@ -10,6 +10,7 @@ chrono.workspace = true
 gethostname.workspace = true
 regex.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 toml.workspace = true
 directories.workspace = true
 clap.workspace = true
