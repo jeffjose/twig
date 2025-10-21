@@ -33,6 +33,10 @@ struct Cli {
     /// Shell output mode (tcsh, bash, zsh) - outputs shell-specific prompt format
     #[arg(long, value_name = "SHELL")]
     mode: Option<String>,
+
+    /// Show debug information before prompt (only with --mode for shell integration)
+    #[arg(long)]
+    debug: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -181,7 +185,7 @@ fn main() {
 
     let total_time = start.elapsed();
 
-    // Output based on show_box flag
+    // Output based on show_box and debug flags
     if show_box {
         // Development/testing mode: boxed output with timing
         print_boxed(
@@ -192,8 +196,22 @@ fn main() {
             render_time,
             total_time,
         );
+    } else if cli.debug && cli.mode.is_some() {
+        // Debug mode for shell integration: show debug info in plain text before prompt
+        println!(
+            "Config: {} | Cache: {}",
+            config_path.display(),
+            cache_status
+        );
+        println!(
+            "Timing: {:.2}ms total (config: {:.2}ms | render: {:.2}ms)",
+            total_time.as_secs_f64() * 1000.0,
+            config_time.as_secs_f64() * 1000.0,
+            render_time.as_secs_f64() * 1000.0
+        );
+        print!("{}", output);
     } else {
-        // Shell integration mode: just the prompt, no newline
+        // Shell integration or prompt mode: just the prompt, no newline
         print!("{}", output);
     }
 }
