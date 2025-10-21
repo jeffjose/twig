@@ -34,7 +34,7 @@ struct Cli {
     #[arg(long, value_name = "SHELL")]
     mode: Option<String>,
 
-    /// Show debug information before prompt (only with --mode for shell integration)
+    /// Show debug information before prompt (only with --mode). Can also use TWIG_DEBUG env var
     #[arg(long)]
     debug: bool,
 }
@@ -196,8 +196,9 @@ fn main() {
             render_time,
             total_time,
         );
-    } else if cli.debug && cli.mode.is_some() {
+    } else if (cli.debug || std::env::var("TWIG_DEBUG").is_ok()) && cli.mode.is_some() {
         // Debug mode for shell integration: show debug info in plain text before prompt
+        // Enabled via --debug flag or TWIG_DEBUG environment variable
         println!(
             "Config: {} | Cache: {}",
             config_path.display(),
