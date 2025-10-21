@@ -1,8 +1,8 @@
-# Plugin Architecture Design
+# Plugin Architecture - Implementation Guide
 
 ## Context
 
-Currently, data providers (time, hostname, cwd) are hardcoded in main.rs. As we add more providers (git, ip, battery, etc.), this approach doesn't scale. Before adding git support, we should design a proper plugin architecture.
+Currently, data providers (time, hostname, cwd) are hardcoded in main.rs. Before adding git support, we need a plugin architecture that scales.
 
 **Current state:**
 - Time, hostname, cwd are hardcoded in main.rs
@@ -12,42 +12,84 @@ Currently, data providers (time, hostname, cwd) are hardcoded in main.rs. As we 
 - Not extensible for future providers
 
 **Goal:**
-- Plugin-based architecture
+- Plugin-based architecture where one plugin can handle multiple sections
 - Add providers without modifying main.rs
 - Scalable for future additions (kubernetes, docker, AWS, etc.)
 - Clear separation between core and plugins
 
-## The Problem
+**Implementation Focus:**
+- **Primary target**: Git provider (fully detailed)
+- **Future providers**: Battery, IP, Network (mentioned for architecture validation)
 
-Looking at the next breadth-first step (Git Provider), we noticed:
+## Key Design Decisions
 
-1. Adding git would require hardcoding more logic in main.rs
-2. Every new provider (ip, battery, etc.) would repeat this pattern
-3. The old prompt (reference/.prompt) has extensive git support - we need that flexibility
-4. No clear boundary between core functionality and data providers
+### 1. Multi-Section Plugins
+**One plugin can register multiple config sections**
+
+Example: `BuiltinProvider` handles `[time]`, `[hostname]`, and `[cwd]` sections together
+```rust
+impl Provider for BuiltinProvider {
+    fn sections(&self) -> Vec<&str> {
+        vec!["time", "hostname", "cwd"]
+    }
+}
+```
+
+### 2. Prefix Convention for Variable Discovery
+**How do we know which provider handles `{git_dirty}`?**
+
+Variables use a **prefix convention**:
+- `{git}`, `{git_dirty}`, `{git_ahead}` → all handled by GitProvider
+- `{battery}`, `{battery_percent}`, `{battery_status}` → all handled by BatteryProvider
+
+The prefix (before underscore or standalone) maps to the provider name. Simple, scalable, self-documenting.
+
+### 3. Error Handling: Silent Graceful Degradation + Validation Mode
+**Normal mode**: Return empty strings on errors (graceful UX)
+- Git not installed? `{git}` shows empty string, prompt still works
+- Not in a git repo? `{git}` shows empty string, no errors
+
+**Validation mode**: `twig --validate` shows detailed errors for debugging
+```bash
+$ twig --validate
+✓ time provider: OK
+✓ hostname provider: OK
+✗ git provider: git command not found
+✗ battery provider: /sys/class/power_supply/BAT0 not found
+```
+
+### 4. Implicit Sections with Defaults
+**You can use `{git}` without a `[git]` section in config**
+
+```toml
+# This works immediately - no [git] section needed!
+[prompt]
+format = '{time:cyan} {git:yellow} {cwd:green}'
+```
+
+When twig sees `{git}` in template:
+1. Checks if `[git]` section exists
+2. If not, calls `GitProvider::default_config()` to get implicit defaults
+3. Provider runs with defaults
+4. User only adds `[git]` section when they want to customize
+
+Every provider MUST implement `default_config()` to support this.
 
 ## Proposed Architecture
 
 ### Core vs Plugins
 
-**Hardcoded Builtins (Keep Simple):**
+**Builtins (Refactored into BuiltinProvider):**
 - **Environment variables**: `{$VAR}` - Special syntax, always available
-- **Time**: `{time}` - Simple, formatting only, no external state
-- **Hostname**: `{hostname}` - Simple, cacheable by daemon
-- **CWD**: `{cwd}` - Simple, always available from OS
+- **Time**: `{time}` - Simple formatting
+- **Hostname**: `{hostname}` - Cacheable by daemon
+- **CWD**: `{cwd}` - Always available from OS
+
+All three handled by single `BuiltinProvider` that manages multiple sections.
 
 **Plugins (Extensible Architecture):**
-- **Git**: Branch, status, dirty indicators, ahead/behind
-- **IP**: Network interfaces, IPv4/IPv6
-- **Battery**: Percentage, status, time remaining
-- **Future possibilities**:
-  - Kubernetes context
-  - Docker container info
-  - AWS profile
-  - Terraform workspace
-  - Python virtualenv
-  - Node.js version
-  - Custom user plugins
+- **Git**: Branch, status, dirty indicators, ahead/behind (PRIMARY FOCUS)
+- Future: Battery, IP, Kubernetes context, Docker, AWS profile, etc.
 
 ### Provider Trait
 
@@ -57,56 +99,82 @@ Looking at the next breadth-first step (Git Provider), we noticed:
 use serde_json::Value;
 use std::collections::HashMap;
 
+#[derive(Debug)]
+pub enum ProviderError {
+    CommandNotFound(String),
+    ExecutionFailed(String),
+    ResourceNotAvailable(String),
+    ParseError(String),
+}
+
+pub type ProviderResult<T> = Result<T, ProviderError>;
+
 /// Trait for data providers that contribute variables to prompts
 pub trait Provider {
-    /// Provider name - used for registration and config section matching
+    /// Provider name - used for registration
     ///
-    /// Example: "git", "ip", "battery"
+    /// Example: "git", "builtin", "battery"
     fn name(&self) -> &str;
 
-    /// Config section name (usually same as name, but can override)
+    /// Config sections this provider handles
     ///
-    /// Example: For "git" provider, config section is [git]
-    fn config_section(&self) -> &str {
-        self.name()
-    }
+    /// A single provider can handle multiple config sections.
+    ///
+    /// Examples:
+    /// - GitProvider: vec!["git"]
+    /// - BuiltinProvider: vec!["time", "hostname", "cwd"]
+    /// - BatteryProvider: vec!["battery"]
+    ///
+    /// The registry uses this to route config sections to providers.
+    fn sections(&self) -> Vec<&str>;
 
     /// Collect variables from this provider
     ///
     /// # Arguments
-    /// * `config` - Optional config section for this provider (parsed from TOML)
+    /// * `config` - Full config object (provider reads its own sections)
+    /// * `validate` - If true, return errors instead of empty strings
     ///
     /// # Returns
     /// HashMap of variable_name -> value pairs
+    ///
+    /// # Error Handling
+    /// - If validate=false: Return empty vars on error (graceful degradation)
+    /// - If validate=true: Return Err(ProviderError) for debugging
     ///
     /// # Examples
     /// ```
     /// // Git provider might return:
     /// {
-    ///     "git": "main",                    // Branch name
-    ///     "git_dirty": "true",              // Has uncommitted changes
-    ///     "git_ahead": "2",                 // Commits ahead of remote
-    ///     "git_behind": "0",                // Commits behind remote
-    /// }
-    ///
-    /// // Battery provider might return:
-    /// {
-    ///     "battery": "85%",                 // Formatted percentage
-    ///     "battery_percent": "85",          // Raw number
-    ///     "battery_status": "Discharging",  // Status string
+    ///     "git": "main",           // Branch name
+    ///     "git_dirty": "true",     // Has uncommitted changes
+    ///     "git_ahead": "2",        // Commits ahead of remote
+    ///     "git_behind": "0",       // Commits behind remote
     /// }
     /// ```
-    fn collect(&self, config: Option<&Value>) -> HashMap<String, String>;
+    fn collect(&self, config: &Config, validate: bool) -> ProviderResult<HashMap<String, String>>;
 
-    /// Default config if section is missing but provider is used in template
+    /// Default config if section is missing but variables are used in template
     ///
-    /// This enables implicit section creation like we do for time/hostname/cwd
+    /// REQUIRED for implicit section support. Every provider must implement this.
     ///
     /// # Returns
-    /// Optional default config as JSON Value
-    fn default_config(&self) -> Option<Value> {
-        None
-    }
+    /// HashMap of section_name -> default config
+    ///
+    /// # Examples
+    /// ```
+    /// // GitProvider returns:
+    /// {
+    ///     "git": {} // No config needed, just enable it
+    /// }
+    ///
+    /// // BuiltinProvider returns:
+    /// {
+    ///     "time": { "format": "%H:%M:%S" },
+    ///     "hostname": {},
+    ///     "cwd": {}
+    /// }
+    /// ```
+    fn default_config(&self) -> HashMap<String, Value>;
 
     /// Whether this provider can be cached by the daemon
     ///
@@ -138,7 +206,10 @@ use std::collections::HashMap;
 
 /// Registry of all available providers
 pub struct ProviderRegistry {
+    // Provider name -> Provider
     providers: HashMap<String, Box<dyn Provider>>,
+    // Section name -> Provider name (one section maps to one provider)
+    section_map: HashMap<String, String>,
 }
 
 impl ProviderRegistry {
@@ -146,25 +217,43 @@ impl ProviderRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
             providers: HashMap::new(),
+            section_map: HashMap::new(),
         };
 
         // Register built-in plugins
+        registry.register(Box::new(BuiltinProvider::new()));
         registry.register(Box::new(GitProvider::new()));
-        registry.register(Box::new(IpProvider::new()));
-        registry.register(Box::new(BatteryProvider::new()));
+
+        // Future providers (stubs for now):
+        // registry.register(Box::new(BatteryProvider::new()));
 
         registry
     }
 
     /// Register a new provider
+    ///
+    /// This updates both the provider map and section map.
+    /// One provider can handle multiple sections.
     pub fn register(&mut self, provider: Box<dyn Provider>) {
         let name = provider.name().to_string();
+
+        // Map each section to this provider
+        for section in provider.sections() {
+            self.section_map.insert(section.to_string(), name.clone());
+        }
+
         self.providers.insert(name, provider);
     }
 
     /// Get provider by name
     pub fn get(&self, name: &str) -> Option<&dyn Provider> {
         self.providers.get(name).map(|b| b.as_ref())
+    }
+
+    /// Get provider that handles a specific section
+    pub fn get_by_section(&self, section: &str) -> Option<&dyn Provider> {
+        self.section_map.get(section)
+            .and_then(|name| self.get(name))
     }
 
     /// List all registered provider names
@@ -174,29 +263,24 @@ impl ProviderRegistry {
 
     /// Collect variables from all providers
     ///
-    /// Iterates through all registered providers and collects their variables
-    /// based on the config sections available.
-    ///
     /// # Arguments
     /// * `config` - The full config object
+    /// * `validate` - If true, providers return errors instead of empty values
     ///
     /// # Returns
-    /// HashMap of all variables from all providers
-    pub fn collect_all(&self, config: &Config) -> HashMap<String, String> {
+    /// Result with HashMap of all variables or first error encountered
+    pub fn collect_all(&self, config: &Config, validate: bool) -> ProviderResult<HashMap<String, String>> {
         let mut variables = HashMap::new();
 
         for provider in self.providers.values() {
-            // Get config section for this provider (if it exists)
-            let section = config.get_section(provider.config_section());
-
-            // Collect variables from provider
-            let provider_vars = provider.collect(section);
-
-            // Merge into overall variables
-            variables.extend(provider_vars);
+            match provider.collect(config, validate) {
+                Ok(vars) => variables.extend(vars),
+                Err(e) if validate => return Err(e),
+                Err(_) => {} // Silent failure in non-validate mode
+            }
         }
 
-        variables
+        Ok(variables)
     }
 
     /// Collect variables from specific providers only
@@ -207,32 +291,66 @@ impl ProviderRegistry {
     /// # Arguments
     /// * `provider_names` - List of provider names to query
     /// * `config` - The full config object
+    /// * `validate` - If true, providers return errors
     ///
     /// # Returns
-    /// HashMap of variables from specified providers only
-    pub fn collect_from(&self, provider_names: &[&str], config: &Config) -> HashMap<String, String> {
+    /// Result with HashMap of variables from specified providers
+    pub fn collect_from(
+        &self,
+        provider_names: &[&str],
+        config: &Config,
+        validate: bool,
+    ) -> ProviderResult<HashMap<String, String>> {
         let mut variables = HashMap::new();
 
         for name in provider_names {
             if let Some(provider) = self.get(name) {
-                let section = config.get_section(provider.config_section());
-                let provider_vars = provider.collect(section);
-                variables.extend(provider_vars);
+                match provider.collect(config, validate) {
+                    Ok(vars) => variables.extend(vars),
+                    Err(e) if validate => return Err(e),
+                    Err(_) => {}
+                }
             }
         }
 
-        variables
+        Ok(variables)
+    }
+
+    /// Determine which providers are needed based on variables in template
+    ///
+    /// Uses prefix convention: {git_dirty} -> "git" provider
+    ///
+    /// # Arguments
+    /// * `variables` - List of variable names found in template
+    ///
+    /// # Returns
+    /// List of provider names needed
+    pub fn determine_providers(&self, variables: &[&str]) -> Vec<&str> {
+        let mut needed = std::collections::HashSet::new();
+
+        for var in variables {
+            // Extract prefix (before first underscore, or whole name)
+            let prefix = var.split('_').next().unwrap_or(var);
+
+            // Check if any section matches this prefix
+            if let Some(provider_name) = self.section_map.get(prefix) {
+                needed.insert(provider_name.as_str());
+            }
+        }
+
+        needed.into_iter().collect()
     }
 }
 ```
 
-### Example Provider: Git
+### Git Provider (DETAILED IMPLEMENTATION)
 
 ```rust
 // twig/src/providers/git.rs
 
-use super::Provider;
-use serde_json::Value;
+use super::{Provider, ProviderError, ProviderResult};
+use crate::config::Config;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Command;
 
@@ -241,6 +359,15 @@ pub struct GitProvider;
 impl GitProvider {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Check if git command is available
+    fn git_available(&self) -> bool {
+        Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 
     /// Check if current directory is in a git repo
@@ -260,7 +387,12 @@ impl GitProvider {
             .ok()?;
 
         if output.status.success() {
-            Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if branch.is_empty() {
+                None // Detached HEAD state
+            } else {
+                Some(branch)
+            }
         } else {
             None
         }
@@ -274,6 +406,25 @@ impl GitProvider {
             .map(|o| !o.stdout.is_empty())
             .unwrap_or(false)
     }
+
+    /// Get commits ahead/behind remote
+    fn get_ahead_behind(&self) -> Option<(u32, u32)> {
+        let output = Command::new("git")
+            .args(&["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
+            .output()
+            .ok()?;
+
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let parts: Vec<&str> = text.trim().split_whitespace().collect();
+            if parts.len() == 2 {
+                let ahead = parts[0].parse().ok()?;
+                let behind = parts[1].parse().ok()?;
+                return Some((ahead, behind));
+            }
+        }
+        None
+    }
 }
 
 impl Provider for GitProvider {
@@ -281,32 +432,63 @@ impl Provider for GitProvider {
         "git"
     }
 
-    fn collect(&self, config: Option<&Value>) -> HashMap<String, String> {
+    fn sections(&self) -> Vec<&str> {
+        vec!["git"]
+    }
+
+    fn collect(&self, config: &Config, validate: bool) -> ProviderResult<HashMap<String, String>> {
         let mut vars = HashMap::new();
 
-        // If not in a git repo, return empty
+        // Check if git is available
+        if !self.git_available() {
+            return if validate {
+                Err(ProviderError::CommandNotFound(
+                    "git command not found".to_string()
+                ))
+            } else {
+                Ok(vars) // Silent failure - return empty vars
+            };
+        }
+
+        // If not in a git repo, return empty (not an error)
         if !self.is_git_repo() {
-            return vars;
+            return Ok(vars);
         }
 
         // Get branch name
         if let Some(branch) = self.get_branch() {
             // Primary variable: {git} = branch name
             vars.insert("git".to_string(), branch);
+        } else {
+            // Detached HEAD or error
+            vars.insert("git".to_string(), "HEAD".to_string());
         }
 
-        // Get dirty status (optional, for depth later)
-        // if config.get("show_dirty").is_some() {
-        //     let dirty = self.is_dirty();
-        //     vars.insert("git_dirty".to_string(), dirty.to_string());
-        // }
+        // Check config for advanced features (future depth)
+        if let Some(git_config) = config.git.as_ref() {
+            // Future: Support for showing dirty status
+            // if git_config.show_dirty == Some(true) {
+            //     let dirty = self.is_dirty();
+            //     vars.insert("git_dirty".to_string(), dirty.to_string());
+            // }
 
-        vars
+            // Future: Support for ahead/behind counts
+            // if git_config.show_ahead_behind == Some(true) {
+            //     if let Some((ahead, behind)) = self.get_ahead_behind() {
+            //         vars.insert("git_ahead".to_string(), ahead.to_string());
+            //         vars.insert("git_behind".to_string(), behind.to_string());
+            //     }
+            // }
+        }
+
+        Ok(vars)
     }
 
-    fn default_config(&self) -> Option<Value> {
-        // No special config needed for basic git
-        None
+    fn default_config(&self) -> HashMap<String, Value> {
+        let mut defaults = HashMap::new();
+        // Git section enabled with no special config
+        defaults.insert("git".to_string(), json!({}));
+        defaults
     }
 
     fn cacheable(&self) -> bool {
@@ -316,72 +498,120 @@ impl Provider for GitProvider {
 }
 ```
 
-### Example Provider: Battery
+**Future enhancements** (for later depth additions):
+```toml
+[git]
+show_dirty = true       # Add {git_dirty} variable
+show_ahead_behind = true  # Add {git_ahead} and {git_behind} variables
+```
+
+Then template could be:
+```toml
+[prompt]
+format = '{git:yellow}{git_dirty:red}+{git_ahead:green}'
+# Example output: "main*+2" (main branch, dirty, 2 commits ahead)
+```
+
+### Builtin Provider (Multi-Section Example)
+
+This shows how **one provider handles multiple config sections**:
 
 ```rust
-// twig/src/providers/battery.rs
+// twig/src/providers/builtin.rs
 
-use super::Provider;
-use serde_json::Value;
+use super::{Provider, ProviderError, ProviderResult};
+use crate::config::Config;
+use chrono::Local;
+use gethostname::gethostname;
+use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::fs;
+use std::env;
 
-pub struct BatteryProvider;
+pub struct BuiltinProvider;
 
-impl BatteryProvider {
+impl BuiltinProvider {
     pub fn new() -> Self {
         Self
     }
-
-    /// Get battery percentage from /sys/class/power_supply/BAT0/capacity (Linux)
-    fn get_percentage(&self) -> Option<u8> {
-        let capacity = fs::read_to_string("/sys/class/power_supply/BAT0/capacity").ok()?;
-        capacity.trim().parse().ok()
-    }
-
-    /// Get battery status from /sys/class/power_supply/BAT0/status (Linux)
-    fn get_status(&self) -> Option<String> {
-        let status = fs::read_to_string("/sys/class/power_supply/BAT0/status").ok()?;
-        Some(status.trim().to_string())
-    }
 }
 
-impl Provider for BatteryProvider {
+impl Provider for BuiltinProvider {
     fn name(&self) -> &str {
-        "battery"
+        "builtin"
     }
 
-    fn collect(&self, config: Option<&Value>) -> HashMap<String, String> {
+    fn sections(&self) -> Vec<&str> {
+        // One provider handles THREE sections
+        vec!["time", "hostname", "cwd"]
+    }
+
+    fn collect(&self, config: &Config, _validate: bool) -> ProviderResult<HashMap<String, String>> {
         let mut vars = HashMap::new();
 
-        // Try to get battery info (gracefully handle systems without battery)
-        if let Some(percent) = self.get_percentage() {
-            // Primary variable: {battery} = formatted percentage
-            vars.insert("battery".to_string(), format!("{}%", percent));
-
-            // Additional variable: {battery_percent} = raw number
-            vars.insert("battery_percent".to_string(), percent.to_string());
+        // Handle [time] section
+        if let Some(time_config) = &config.time {
+            let time = Local::now()
+                .format(&time_config.format)
+                .to_string();
+            vars.insert("time".to_string(), time);
         }
 
-        if let Some(status) = self.get_status() {
-            vars.insert("battery_status".to_string(), status);
+        // Handle [hostname] section
+        if config.hostname.is_some() {
+            let hostname = gethostname()
+                .to_string_lossy()
+                .to_string();
+            vars.insert("hostname".to_string(), hostname);
         }
 
-        vars
+        // Handle [cwd] section
+        if let Some(cwd_config) = &config.cwd {
+            let cwd = env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "?".to_string());
+
+            // Apply custom name if configured
+            let var_name = cwd_config.name.as_deref().unwrap_or("cwd");
+            vars.insert(var_name.to_string(), cwd);
+        }
+
+        Ok(vars)
     }
 
-    fn default_config(&self) -> Option<Value> {
-        None
+    fn default_config(&self) -> HashMap<String, Value> {
+        let mut defaults = HashMap::new();
+        defaults.insert("time".to_string(), json!({ "format": "%H:%M:%S" }));
+        defaults.insert("hostname".to_string(), json!({}));
+        defaults.insert("cwd".to_string(), json!({}));
+        defaults
     }
 
     fn cacheable(&self) -> bool {
-        // Battery changes slowly, can cache
-        true
+        // Time changes constantly, so don't cache
+        false
     }
+}
+```
 
-    fn cache_duration(&self) -> u64 {
-        10 // 10 seconds
-    }
+### Future Providers (Brief Examples)
+
+These demonstrate the architecture scales:
+
+**Battery Provider** (future):
+```rust
+impl Provider for BatteryProvider {
+    fn sections(&self) -> Vec<&str> { vec!["battery"] }
+    // Provides: {battery}, {battery_percent}, {battery_status}
+    // Cacheable: true (battery changes slowly)
+}
+```
+
+**Network Provider** (future):
+```rust
+impl Provider for NetworkProvider {
+    fn sections(&self) -> Vec<&str> { vec!["ip", "wifi"] }
+    // One provider handles both IP and WiFi
+    // Provides: {ip}, {ip_v6}, {wifi_ssid}, {wifi_strength}
 }
 ```
 
@@ -390,34 +620,32 @@ impl Provider for BatteryProvider {
 ```toml
 # User's config.toml
 
-# Builtins (still hardcoded in main.rs)
+# Builtins (handled by BuiltinProvider)
 [time]
-format = "%H:%M:%S"
+format = "%H:%M:%S"  # Can be implicit - this is the default
 
 [hostname]
-# Implicit, no config needed
+# Completely implicit - no config needed
 
 [cwd]
-# Implicit, no config needed
+# Implicit, but can customize:
+# name = "dir"  # Use {dir} instead of {cwd}
 
-# Plugin-based providers
+# Git (handled by GitProvider) - MAIN FOCUS
 [git]
-# Plugin automatically discovers and provides variables:
-# - {git} = branch name (or empty if not in repo)
+# Completely implicit! No config needed to use {git}
+# Just add {git:yellow} to your prompt and it works
+
 # Future depth additions:
-# - {git_dirty} = true/false
-# - {git_ahead} = number
-# - {git_behind} = number
-
-[ip]
-interface = "eth0"  # Optional: specify network interface
-# Provides: {ip}
-
-[battery]
-# Provides: {battery}, {battery_percent}, {battery_status}
+# show_dirty = true         # Enable {git_dirty}
+# show_ahead_behind = true  # Enable {git_ahead} and {git_behind}
 
 [prompt]
-format = '{time:cyan} {git:yellow} {hostname:magenta} {cwd:green} {battery:red} {"$":bold}'
+# Basic usage (all implicit):
+format = '{time:cyan} {git:yellow} {hostname:magenta} {cwd:green} '
+
+# Advanced git usage (future):
+# format = '{git:yellow}{git_dirty:red} +{git_ahead:green} {cwd} '
 ```
 
 ### File Structure
@@ -426,446 +654,451 @@ format = '{time:cyan} {git:yellow} {hostname:magenta} {cwd:green} {battery:red} 
 twig/
 ├── src/
 │   ├── main.rs                 # Core logic, uses ProviderRegistry
-│   ├── config.rs               # Config handling (TOML parsing)
+│   ├── config.rs               # Config handling (TOML parsing) - NEEDS UPDATES
 │   ├── shell/                  # Shell formatters (existing)
 │   │   ├── mod.rs
 │   │   ├── raw.rs
 │   │   ├── bash.rs
 │   │   ├── zsh.rs
 │   │   └── tcsh.rs
-│   └── providers/              # Provider plugins (NEW)
-│       ├── mod.rs              # Provider trait + ProviderRegistry
-│       ├── builtin.rs          # BuiltinProvider (time, hostname, cwd) - OPTIONAL
-│       ├── git.rs              # GitProvider
-│       ├── ip.rs               # IpProvider
-│       └── battery.rs          # BatteryProvider
+│   └── providers/              # Provider plugins (NEW DIRECTORY)
+│       ├── mod.rs              # Provider trait + ProviderRegistry + ProviderError
+│       ├── builtin.rs          # BuiltinProvider (time, hostname, cwd)
+│       └── git.rs              # GitProvider (PRIMARY FOCUS)
+│       # Future:
+│       # ├── battery.rs
+│       # └── network.rs
 ```
 
-### Main.rs Changes
+### Main.rs Refactoring
 
-**Before (current):**
+**Current (hardcoded):**
 ```rust
 fn main() {
-    // ... config loading ...
-
+    let config = load_config();
     let mut variables = HashMap::new();
 
     // HARDCODED: Time
     if let Some(time_config) = &config.time {
-        let time = Local::now().format(&time_config.format).to_string();
-        variables.insert("time", time);
+        variables.insert("time", format_time(&time_config.format));
     }
-
     // HARDCODED: Hostname
-    if let Some(hostname_config) = &config.hostname {
-        let hostname = gethostname().to_string_lossy().to_string();
-        variables.insert("hostname", hostname);
-    }
-
     // HARDCODED: CWD
-    if let Some(cwd_config) = &config.cwd {
-        let cwd = std::env::current_dir()?.to_string_lossy().to_string();
-        variables.insert("cwd", cwd);
-    }
+    // etc...
 
-    // ... substitute_variables ...
+    let output = substitute_variables(&config.prompt.format, &variables);
+    println!("{}", output);
 }
 ```
 
-**After (plugin-based):**
+**After refactoring:**
 ```rust
-fn main() {
-    // ... config loading ...
+mod providers;
 
-    // Create provider registry
+use providers::ProviderRegistry;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = parse_args();
+    let mut config = load_config();
+
+    // Apply implicit sections for variables used in template
+    apply_implicit_sections(&mut config, &config.prompt.format);
+
+    // Create provider registry (registers all providers)
     let registry = ProviderRegistry::new();
 
-    // Collect variables from builtins (still hardcoded for simplicity)
-    let mut variables = collect_builtins(&config);
+    // Collect variables from all providers
+    let validate = args.validate;
+    let variables = match registry.collect_all(&config, validate) {
+        Ok(vars) => vars,
+        Err(e) if validate => {
+            eprintln!("Provider error: {:?}", e);
+            std::process::exit(1);
+        }
+        Err(_) => HashMap::new(), // Should not happen - providers catch errors in non-validate mode
+    };
 
-    // Collect variables from all plugins
-    let plugin_vars = registry.collect_all(&config);
-    variables.extend(plugin_vars);
+    if validate {
+        println!("✓ All providers validated successfully");
+        return Ok(());
+    }
 
-    // ... substitute_variables ...
+    // Substitute and format
+    let output = substitute_variables(&config.prompt.format, &variables);
+    let formatted = format_for_shell(&output, args.mode);
+    println!("{}", formatted);
+
+    Ok(())
 }
-```
 
-Or, even better with implicit sections:
-
-```rust
-fn main() {
-    // ... config loading ...
-
-    // Create provider registry
+/// Apply default configs for variables used in template but missing config sections
+fn apply_implicit_sections(config: &mut Config, template: &str) {
     let registry = ProviderRegistry::new();
+    let vars = discover_variables(template);
 
-    // Discover which variables are used in template
-    let needed_vars = discover_variables(&config.prompt.format);
+    for var in vars {
+        let prefix = var.split('_').next().unwrap_or(&var);
 
-    // Collect builtins
-    let mut variables = collect_builtins(&config, &needed_vars);
+        if let Some(provider) = registry.get_by_section(prefix) {
+            let defaults = provider.default_config();
 
-    // Determine which providers are needed
-    let needed_providers = determine_providers(&needed_vars, &registry);
-
-    // Collect only from needed providers (optimization)
-    let plugin_vars = registry.collect_from(&needed_providers, &config);
-    variables.extend(plugin_vars);
-
-    // ... substitute_variables ...
+            for (section_name, default_value) in defaults {
+                if !config.has_section(&section_name) {
+                    config.add_implicit_section(section_name, default_value);
+                }
+            }
+        }
+    }
 }
 ```
 
-## Migration Strategy
+## Implementation Plan
 
-### Phase 1: Create Provider Infrastructure
+### Phase 1: Provider Infrastructure (Foundation)
 
-**Goal**: Set up the architecture without breaking existing functionality
+**Goal**: Create the provider system without breaking anything
 
-**Steps**:
-1. Create `twig/src/providers/` directory
-2. Create `providers/mod.rs` with Provider trait and ProviderRegistry
-3. Keep existing hardcoded logic in main.rs
-4. Test that everything still works
+**1. Create directory and module structure**
+```bash
+mkdir src/providers
+touch src/providers/mod.rs
+touch src/providers/builtin.rs
+touch src/providers/git.rs
+```
 
-**Files to create**:
-- `twig/src/providers/mod.rs` (trait + registry)
-- `twig/src/providers/git.rs` (stub, returns empty vars)
-- `twig/src/providers/ip.rs` (stub)
-- `twig/src/providers/battery.rs` (stub)
+**2. Implement `src/providers/mod.rs`**:
+- Copy `Provider` trait from this doc
+- Copy `ProviderError` and `ProviderResult` types
+- Copy `ProviderRegistry` struct
+- Add: `pub mod builtin;`
+- Add: `pub mod git;`
 
-**Changes to main.rs**:
-- Add `mod providers;`
-- Create registry in main() (but don't use it yet)
+**3. Implement stub providers**:
+- `builtin.rs`: Copy BuiltinProvider from this doc (full implementation)
+- `git.rs`: Copy GitProvider from this doc (full implementation)
 
-**Test**:
-- `cargo build` succeeds
-- All existing functionality works unchanged
-- No user-visible changes
+**4. Update `src/main.rs`**:
+- Add: `mod providers;` at top
+- Don't integrate yet - just ensure it compiles
 
-### Phase 2: Refactor Builtins (Optional)
+**5. Test**:
+```bash
+cargo build
+```
+Should compile with no errors. No functionality changes.
 
-**Goal**: Extract time/hostname/cwd into a builtin provider for consistency
+---
 
-**Options**:
-A. Keep builtins hardcoded in main.rs (simpler)
-B. Create BuiltinProvider that handles all three (more consistent)
+### Phase 2: Config Updates
 
-**Decision needed**: Is consistency worth the complexity?
+**Goal**: Add support for Git config section and implicit sections
 
-**If we do refactor builtins**:
+**1. Update `src/config.rs`**:
+
+Add Git config struct:
 ```rust
-// providers/builtin.rs
-pub struct BuiltinProvider;
+#[derive(Debug, Deserialize)]
+pub struct GitConfig {
+    pub name: Option<String>,  // Custom variable name
+    // Future: show_dirty, show_ahead_behind
+}
+```
 
-impl Provider for BuiltinProvider {
-    fn name(&self) -> &str {
-        "builtin"
+Add to Config struct:
+```rust
+pub struct Config {
+    pub git: Option<GitConfig>,
+    // ... existing fields ...
+}
+```
+
+Add helper methods:
+```rust
+impl Config {
+    pub fn has_section(&self, section: &str) -> bool {
+        match section {
+            "time" => self.time.is_some(),
+            "hostname" => self.hostname.is_some(),
+            "cwd" => self.cwd.is_some(),
+            "git" => self.git.is_some(),
+            _ => false,
+        }
     }
 
-    fn collect(&self, config: Option<&Value>) -> HashMap<String, String> {
-        let mut vars = HashMap::new();
-
-        // Time
-        if let Some(time_config) = config.get("time") {
-            let format = time_config["format"].as_str().unwrap_or("%H:%M:%S");
-            vars.insert("time".to_string(), Local::now().format(format).to_string());
+    pub fn add_implicit_section(&mut self, section: String, _value: Value) {
+        match section.as_str() {
+            "time" => self.time = Some(TimeConfig { format: "%H:%M:%S".to_string() }),
+            "hostname" => self.hostname = Some(HostnameConfig {}),
+            "cwd" => self.cwd = Some(CwdConfig { name: None }),
+            "git" => self.git = Some(GitConfig { name: None }),
+            _ => {}
         }
-
-        // Hostname
-        if config.get("hostname").is_some() {
-            vars.insert("hostname".to_string(), gethostname().to_string_lossy().to_string());
-        }
-
-        // CWD
-        if config.get("cwd").is_some() {
-            let cwd = std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("?"))
-                .to_string_lossy()
-                .to_string();
-            vars.insert("cwd".to_string(), cwd);
-        }
-
-        vars
     }
 }
 ```
 
-### Phase 3: Implement Git Provider
+**2. Test**:
+```bash
+cargo build
+```
 
-**Goal**: Add git as the first real plugin
+---
 
-**Steps**:
-1. Implement GitProvider::collect() fully
-2. Register GitProvider in ProviderRegistry::new()
-3. Add [git] section support to Config
-4. Test with template: `{git:yellow}`
+### Phase 3: Integrate Providers into Main
 
-**Testing**:
+**Goal**: Replace hardcoded logic with provider system
+
+**1. Add CLI argument for --validate**:
+```rust
+// In main.rs or cli parsing
+#[derive(Parser)]
+struct Args {
+    #[arg(long)]
+    validate: bool,
+    // ... existing args ...
+}
+```
+
+**2. Replace hardcoded variable collection in main.rs**:
+
+Remove old hardcoded blocks for time/hostname/cwd.
+
+Add:
+```rust
+mod providers;
+use providers::ProviderRegistry;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = parse_args();
+    let mut config = load_config()?;
+
+    // Apply implicit sections
+    apply_implicit_sections(&mut config, &config.prompt.format);
+
+    // Collect from providers
+    let registry = ProviderRegistry::new();
+    let variables = registry.collect_all(&config, args.validate)
+        .unwrap_or_else(|e| {
+            if args.validate {
+                eprintln!("Error: {:?}", e);
+                std::process::exit(1);
+            }
+            HashMap::new()
+        });
+
+    if args.validate {
+        println!("✓ All providers OK");
+        return Ok(());
+    }
+
+    // Continue with existing logic
+    let output = substitute_variables(&config.prompt.format, &variables);
+    // ... format and print ...
+
+    Ok(())
+}
+
+// Add helper function (from this doc)
+fn apply_implicit_sections(config: &mut Config, template: &str) {
+    // Implementation from this doc
+}
+
+fn discover_variables(template: &str) -> Vec<String> {
+    // Parse template and extract {variable} names
+    // Reuse existing parser logic
+}
+```
+
+**3. Test**:
+```bash
+# Build
+cargo build
+
+# Test existing functionality still works
+./twig --mode bash
+
+# Test in git repo
+cd /path/to/git/repo
+./twig --mode bash  # Should show time/hostname/cwd (no change yet)
+
+# Test validation
+./twig --validate
+```
+
+---
+
+### Phase 4: Enable Git in Prompt
+
+**Goal**: Users can now use `{git}` in their prompts!
+
+**1. Update your config.toml**:
 ```toml
 [prompt]
-format = '{time:cyan} {git:yellow} {hostname:magenta}'
+format = '{time:cyan} {git:yellow} {hostname:magenta} {cwd:green} '
 ```
 
-In git repo:
-- Should show branch name
+**2. Test**:
+```bash
+cd /path/to/git/repo
+./twig --mode bash
 
-Not in git repo:
-- Should show nothing (empty string)
-
-### Phase 4: Add IP and Battery
-
-**Goal**: Prove the architecture scales
-
-**Steps**:
-1. Implement IpProvider
-2. Implement BatteryProvider
-3. Test with all providers active
-
-### Phase 5: Optimization
-
-**Goal**: Only collect from providers that are actually used
-
-**Steps**:
-1. Parse template to discover which variables are used
-2. Map variables to providers
-3. Only call collect() on needed providers
-
-This is important for performance - don't query git if template doesn't use `{git}`.
-
-## Open Questions
-
-### 1. Should we refactor builtins into providers?
-
-**Option A: Keep builtins hardcoded in main.rs**
-- Pros: Simpler, less abstraction
-- Cons: Inconsistent with plugins
-
-**Option B: Create BuiltinProvider**
-- Pros: Consistent architecture, everything is a provider
-- Cons: More complex, another abstraction layer
-
-**Recommendation**: Start with Option A (keep simple), refactor later if needed.
-
-### 2. Multi-value providers
-
-Git might want to return multiple variables:
-- `{git}` - branch name
-- `{git_dirty}` - true/false
-- `{git_ahead}` - number of commits ahead
-- `{git_behind}` - number of commits behind
-
-**Options**:
-A. Provider returns multiple variables (HashMap)
-B. Provider returns single value, variables are split by config
-
-**Recommendation**: Option A (HashMap). More flexible, provider decides what variables it provides.
-
-### 3. Variable naming conventions
-
-**Option A: Flat namespace**
-```
-{git}         = "main"
-{git_dirty}   = "true"
-{git_ahead}   = "2"
+# Should see branch name in prompt!
 ```
 
-**Option B: Nested (would require template changes)**
-```
-{git.branch}  = "main"
-{git.dirty}   = "true"
-{git.ahead}   = "2"
-```
+**3. Test edge cases**:
+```bash
+# Not in git repo
+cd ~
+./twig --mode bash
+# Should show empty string for git (graceful)
 
-**Recommendation**: Option A (flat namespace). Simpler template syntax, matches current design.
+# Validate mode
+./twig --validate
+# Should show ✓ for all providers
 
-### 4. Primary variable name
+# Git not installed (simulate)
+alias git="false"
+./twig --mode bash
+# Should work, git just empty
 
-When git provider is used, what does `{git}` return?
-
-**Options**:
-A. Just branch name: `{git}` = `"main"`
-B. Both `{git}` and `{git_branch}` = `"main"`
-C. Formatted string: `{git}` = `"main +2"` (branch with ahead count)
-
-**Recommendation**: Option A (just branch name). Clean, intuitive. Users can customize in template.
-
-### 5. Config section vs variable name
-
-**Current behavior** (for builtins):
-```toml
-[cwd]
-name = "dir"  # Use {dir} instead of {cwd}
+./twig --validate
+# Should show error about git
 ```
 
-**Should plugins support this?**
-```toml
-[git]
-name = "branch"  # Use {branch} instead of {git}
-```
+---
 
-**Recommendation**: Yes, support `name` field for consistency. Provider.collect() should check config for custom name.
+### Phase 5: Testing & Refinement
 
-### 6. Provider discovery
+**Test matrix**:
+- ✓ In git repo: shows branch
+- ✓ Not in git repo: shows empty
+- ✓ Git not installed: shows empty (validates shows error)
+- ✓ Detached HEAD: shows "HEAD"
+- ✓ Existing time/hostname/cwd still work
+- ✓ --validate flag works
 
-**When template uses `{git}`, how do we know to use GitProvider?**
-
-**Option A: Hardcoded mapping**
+**Integration tests**:
+Create `tests/integration_test.rs`:
 ```rust
-fn determine_provider(var_name: &str) -> Option<&str> {
-    match var_name {
-        "git" | "git_dirty" | "git_ahead" => Some("git"),
-        "ip" => Some("ip"),
-        "battery" | "battery_percent" => Some("battery"),
-        _ => None,
-    }
+#[test]
+fn test_git_provider_in_repo() {
+    // Test git provider returns branch name
+}
+
+#[test]
+fn test_git_provider_outside_repo() {
+    // Test git provider returns empty
 }
 ```
 
-**Option B: Provider registration includes variable names**
-```rust
-pub trait Provider {
-    fn name(&self) -> &str;
-    fn provides_variables(&self) -> Vec<&str>; // ["git", "git_dirty", ...]
-}
+---
+
+### Phase 6: Documentation
+
+**Update README.md** with:
+```markdown
+## Git Support
+
+Twig now supports showing the current git branch in your prompt!
+
+### Usage
+
+Add `{git}` to your prompt:
+
+```toml
+[prompt]
+format = '{time} {git:yellow} {cwd} '
 ```
 
-**Option C: Variable prefix convention**
-All variables starting with `git_` come from git provider, etc.
+No additional configuration needed - it just works!
 
-**Recommendation**: Option C (prefix convention). Simple, scalable, self-documenting.
+### Troubleshooting
 
-### 7. Daemon integration
+Run validation mode to check if git is working:
+```bash
+twig --validate
+```
+```
 
-Some providers (hostname) can be cached by daemon.
-Others (git) should run live every time.
+---
 
-**Should daemon support plugins?**
+### Optional: Future Enhancements (Later)
 
-**Recommendation**: Phase 1 - don't worry about daemon. Phase 2 - add `cacheable()` method to trait.
+These are NOT part of initial implementation:
 
-### 8. Error handling
+- **Git dirty status**: Add `show_dirty` config option
+- **Ahead/behind**: Add `show_ahead_behind` config option
+- **Battery provider**: New provider for battery status
+- **Performance optimization**: Only query needed providers (skip providers not in template)
 
-What happens if git command fails? Network is down for IP? Battery doesn't exist?
+## Design Decisions Summary
 
-**Options**:
-A. Return empty string (silent failure)
-B. Return error string: `{git}` = `"<error>"`
-C. Return None, variable is omitted from template
+All key decisions have been made (see "Key Design Decisions" section above):
 
-**Recommendation**: Option A (empty string). Silent, graceful degradation.
-
-### 9. Implicit section creation
-
-Currently, using `{time}` creates `[time]` section implicitly.
-
-**Should plugins work the same way?**
-
-Using `{git}` without `[git]` section:
-- Should it auto-create `[git]` section with defaults?
-- Or require explicit `[git]` section?
-
-**Recommendation**: Yes, implicit creation. Consistent with current behavior. Provider.default_config() provides defaults.
+✓ **Multi-section plugins**: One provider can handle multiple sections (e.g., BuiltinProvider handles time/hostname/cwd)
+✓ **Prefix convention**: Variables use prefix to map to providers (`git_*` → GitProvider)
+✓ **Error handling**: Silent graceful degradation in normal mode, errors in `--validate` mode
+✓ **Implicit sections**: Variables work without config sections using `default_config()`
+✓ **Multi-value providers**: Providers return `HashMap<String, String>` with multiple variables
+✓ **Variable naming**: Flat namespace (`git_dirty` not `git.dirty`)
+✓ **Builtins refactoring**: YES - create BuiltinProvider for consistency
+✓ **Daemon integration**: Use `cacheable()` method in trait (future optimization)
 
 ## Next Steps
 
-**Decision point**: Do we want to implement this architecture before adding git?
+**Start with Phase 1** of the implementation plan above:
 
-**Option A: Refactor first** (Recommended)
-1. Implement provider architecture (Phase 1-2)
-2. Add git as first plugin (Phase 3)
-3. Add other plugins (Phase 4)
+1. Create `src/providers/` directory
+2. Implement Provider trait and registry
+3. Implement BuiltinProvider
+4. Implement GitProvider
+5. Update Config for git section
+6. Integrate into main.rs
+7. Test thoroughly
+8. Document
 
-**Option B: Add git first, refactor later**
-1. Hardcode git in main.rs (quick)
-2. Refactor to plugins later (when we add more providers)
+Follow the detailed phase-by-phase plan in the "Implementation Plan" section.
 
-**Recommendation**: Option A. The architecture is solid, and it prevents accumulating more technical debt.
+## Why This Architecture?
 
-**Immediate tasks if we proceed**:
-1. Answer the open questions above
-2. Create providers/mod.rs with trait definition
-3. Create stub providers (git, ip, battery)
-4. Test that architecture works
-5. Implement GitProvider.collect()
-6. Test git in prompt template
+**Benefits**:
+- **Scalability**: Add new providers without modifying core code
+- **Testability**: Each provider is isolated and independently testable
+- **Maintainability**: Clear separation of concerns, single responsibility
+- **User-friendly**: Implicit sections mean it "just works" out of the box
+- **Performance**: Can optimize to only query needed providers (future)
+- **Consistency**: All providers follow the same pattern
 
-## Benefits of Plugin Architecture
+**Risks mitigated**:
+- **Over-engineering**: Kept trait simple, only features we need now
+- **Breaking changes**: Incremental migration, everything stays working
+- **User complexity**: Implicit sections + sensible defaults = zero config needed
 
-1. **Scalability**: Add unlimited providers without touching core
-2. **Testability**: Each provider is isolated and testable
-3. **Maintainability**: Clear boundaries, single responsibility
-4. **Extensibility**: Third-party plugins possible in future
-5. **Performance**: Only query providers actually used in template
-6. **Consistency**: All providers follow same pattern
-7. **Discovery**: Easy to list available providers
-8. **Documentation**: Each provider documents its variables
+## Example Usage
 
-## Risks and Mitigation
-
-**Risk 1: Over-engineering**
-- Mitigation: Keep trait simple, don't add features we don't need yet
-
-**Risk 2: Performance overhead**
-- Mitigation: Only call providers that are used (lazy evaluation)
-
-**Risk 3: Breaking changes**
-- Mitigation: Migrate incrementally, keep existing code working
-
-**Risk 4: Complexity for users**
-- Mitigation: Implicit sections, sensible defaults, clear docs
-
-## Example User Flow
-
-**User wants git in prompt:**
-
-1. Edit config:
+**Basic (works immediately, no config needed)**:
 ```toml
 [prompt]
-format = '{time:cyan} {git:yellow} {hostname:magenta}'
+format = '{time:cyan} {git:yellow} {cwd:green} '
 ```
 
-2. No `[git]` section needed - it's implicit!
+**In git repo**: Shows `14:30:15 main ~/code/twig`
+**Not in git repo**: Shows `14:30:15 ~/home`
 
-3. Run twig:
+**With validation**:
 ```bash
-twig --mode tcsh
+$ twig --validate
+✓ builtin provider: OK (time, hostname, cwd)
+✓ git provider: OK
 ```
 
-4. In git repo: Shows branch name in yellow
-5. Not in git repo: Shows nothing (empty)
-6. Works immediately, no explicit config needed
-
-**User wants to customize git:**
-
-1. Add config section:
-```toml
-[git]
-name = "branch"  # Use {branch} instead of {git}
-```
-
-2. Update template:
-```toml
-[prompt]
-format = '{time:cyan} {branch:yellow} {hostname:magenta}'
-```
-
-**User wants advanced git info (future depth):**
-
+**Future advanced usage** (after adding depth):
 ```toml
 [git]
 show_dirty = true
-show_ahead = true
+show_ahead_behind = true
 
 [prompt]
-format = '{time} {git:yellow} {git_dirty:red} +{git_ahead:green}'
+format = '{git:yellow}{git_dirty:red}+{git_ahead:green} {cwd} '
 ```
-
-## Conclusion
-
-The plugin architecture provides a clean, scalable foundation for adding providers. It's the right approach before adding git support.
-
-**Decision needed**: Should we implement this architecture now, or hardcode git first?
-
-**Recommended**: Implement architecture first. It's well-designed and prevents future refactoring pain.
+Output: `main*+2 ~/code/twig` (main branch, dirty, 2 commits ahead)
