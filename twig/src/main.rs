@@ -318,6 +318,101 @@ fn create_default_config() -> Config {
     }
 }
 
+/// Process conditional spaces (~) in template
+/// A tilde (~) acts as a conditional space that only appears if the adjacent variable has a value.
+/// - `~{var}` - space before var if var exists
+/// - `\~` - literal tilde (escaped)
+///
+/// The ~ is evaluated against the variable that immediately follows it.
+fn process_conditional_spaces(template: &str, variables: &HashMap<String, String>) -> String {
+    let mut result = String::new();
+    let chars: Vec<char> = template.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() && chars[i + 1] == '~' {
+            // Escaped tilde: \~ -> ~
+            result.push('~');
+            i += 2;
+        } else if chars[i] == '~' {
+            // Conditional space: look for next variable {var}
+            let remaining = &chars[i + 1..];
+
+            // Find the next variable pattern {var} or {var:color}
+            if let Some(var_name) = extract_next_variable(remaining) {
+                // Check if variable has a value
+                if variable_has_value(&var_name, variables) {
+                    result.push(' '); // Add space
+                }
+                // else: don't add space (variable is empty)
+            } else {
+                // No variable found after ~, treat as literal (or could error)
+                result.push('~');
+            }
+            i += 1;
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    result
+}
+
+/// Extract the variable name from the next {var} or {var:color} pattern
+/// Returns None if no variable pattern found
+fn extract_next_variable(chars: &[char]) -> Option<String> {
+    // Skip whitespace and find the opening {
+    let mut pos = 0;
+    while pos < chars.len() && chars[pos].is_whitespace() {
+        pos += 1;
+    }
+
+    if pos >= chars.len() || chars[pos] != '{' {
+        return None;
+    }
+
+    // Find matching }
+    let mut end = pos + 1;
+    while end < chars.len() && chars[end] != '}' {
+        end += 1;
+    }
+
+    if end >= chars.len() {
+        return None;
+    }
+
+    // Extract content between { and }
+    let content: String = chars[pos + 1..end].iter().collect();
+
+    // Skip literals ("text":color)
+    if content.starts_with('"') {
+        return None;
+    }
+
+    // Extract variable name (before any : for colors)
+    // For environment variables like {$USER:color}, extract $USER
+    let var_name = content.split(':').next()?.to_string();
+
+    Some(var_name)
+}
+
+/// Check if a variable has a non-empty value
+/// Handles both regular variables and environment variables ($VAR)
+fn variable_has_value(var_name: &str, variables: &HashMap<String, String>) -> bool {
+    if var_name.starts_with('$') {
+        // Environment variable
+        let env_var = &var_name[1..];
+        std::env::var(env_var).map(|v| !v.is_empty()).unwrap_or(false)
+    } else {
+        // Regular variable
+        variables
+            .get(var_name)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+    }
+}
+
 /// Template substitution with color/style support
 /// Supports:
 /// - {var} - plain variable
@@ -326,15 +421,20 @@ fn create_default_config() -> Config {
 /// - {"text":color} - literal text with color
 /// - {$ENV_VAR} - environment variable
 /// - {$ENV_VAR:color} - environment variable with color
+/// - ~ - conditional space (only appears if adjacent variable exists)
+/// - \~ - literal tilde
 fn substitute_variables(
     template: &str,
     variables: &HashMap<String, String>,
     formatter: &dyn ShellFormatter,
 ) -> String {
+    // First, process conditional spaces (~)
+    let template = process_conditional_spaces(template, variables);
+
     // Match {anything} patterns
     let re = Regex::new(r"\{([^}]+)\}").unwrap();
 
-    re.replace_all(template, |caps: &regex::Captures| {
+    re.replace_all(&template, |caps: &regex::Captures| {
         let content = &caps[1];
 
         // Check if it's a literal: "text":color
@@ -505,5 +605,207 @@ fn apply_implicit_sections(config: &mut Config, template: &str) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shell::RawFormatter;
+
+    /// Helper to create a simple variable map for testing
+    fn make_vars(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn test_conditional_space_with_value() {
+        let vars = make_vars(&[("cwd", "/home/user"), ("git_branch", "main")]);
+        let formatter = RawFormatter;
+
+        let result = substitute_variables("{cwd}~{git_branch}", &vars, &formatter);
+        assert_eq!(result, "/home/user main");
+    }
+
+    #[test]
+    fn test_conditional_space_without_value() {
+        let vars = make_vars(&[("cwd", "/home/user")]);
+        let formatter = RawFormatter;
+
+        // git_branch is missing (empty)
+        let result = substitute_variables("{cwd}~{git_branch}", &vars, &formatter);
+        assert_eq!(result, "/home/user");
+    }
+
+    #[test]
+    fn test_conditional_space_empty_value() {
+        let vars = make_vars(&[("cwd", "/home/user"), ("git_branch", "")]);
+        let formatter = RawFormatter;
+
+        // git_branch is explicitly empty
+        let result = substitute_variables("{cwd}~{git_branch}", &vars, &formatter);
+        assert_eq!(result, "/home/user");
+    }
+
+    #[test]
+    fn test_multiple_conditional_spaces() {
+        let vars = make_vars(&[
+            ("hostname", "laptop"),
+            ("git_branch", "main"),
+            ("cwd", "/home/user"),
+        ]);
+        let formatter = RawFormatter;
+
+        let result = substitute_variables("{hostname}~{git_branch}~{cwd}", &vars, &formatter);
+        assert_eq!(result, "laptop main /home/user");
+    }
+
+    #[test]
+    fn test_multiple_conditional_spaces_partial() {
+        let vars = make_vars(&[("hostname", "laptop"), ("cwd", "/home/user")]);
+        let formatter = RawFormatter;
+
+        // git_branch is missing, so only one space between hostname and cwd
+        let result = substitute_variables("{hostname}~{git_branch}~{cwd}", &vars, &formatter);
+        assert_eq!(result, "laptop /home/user");
+    }
+
+    #[test]
+    fn test_escaped_tilde() {
+        let vars = make_vars(&[("cwd", "/home/user")]);
+        let formatter = RawFormatter;
+
+        let result = substitute_variables("{cwd}\\~{git_branch}", &vars, &formatter);
+        assert_eq!(result, "/home/user~");
+    }
+
+    #[test]
+    fn test_conditional_space_with_color() {
+        let vars = make_vars(&[("cwd", "/home/user"), ("git_branch", "main")]);
+        let formatter = RawFormatter;
+
+        let result = substitute_variables("{cwd:green}~{git_branch:yellow}", &vars, &formatter);
+        // Should have space between the colored values
+        assert!(result.contains("/home/user"));
+        assert!(result.contains("main"));
+        assert!(result.contains(" ")); // Space should be present
+    }
+
+    #[test]
+    fn test_conditional_space_in_complex_prompt() {
+        let vars = make_vars(&[
+            ("time", "10:38:02"),
+            ("hostname", "jeffjose2.mtv.corp.google.com"),
+            ("cwd", "/usr/local/google/home/jeffjose/scripts/twig"),
+            ("git_branch", "main"),
+        ]);
+        let formatter = RawFormatter;
+
+        let template = "-({time} {hostname} {cwd}~{git_branch})-";
+        let result = substitute_variables(template, &vars, &formatter);
+
+        // With git_branch
+        assert_eq!(
+            result,
+            "-(10:38:02 jeffjose2.mtv.corp.google.com /usr/local/google/home/jeffjose/scripts/twig main)-"
+        );
+    }
+
+    #[test]
+    fn test_conditional_space_in_complex_prompt_no_git() {
+        let vars = make_vars(&[
+            ("time", "10:38:02"),
+            ("hostname", "jeffjose2.mtv.corp.google.com"),
+            ("cwd", "/usr/local/google/home/jeffjose/scripts"),
+        ]);
+        let formatter = RawFormatter;
+
+        let template = "-({time} {hostname} {cwd}~{git_branch})-";
+        let result = substitute_variables(template, &vars, &formatter);
+
+        // Without git_branch - no trailing space before )
+        assert_eq!(
+            result,
+            "-(10:38:02 jeffjose2.mtv.corp.google.com /usr/local/google/home/jeffjose/scripts)-"
+        );
+        // Ensure no double space before the )
+        assert!(!result.contains(" )-"));
+    }
+
+    #[test]
+    fn test_conditional_space_with_literal() {
+        let vars = make_vars(&[("git_branch", "main")]);
+        let formatter = RawFormatter;
+
+        let result = substitute_variables("{\">>\":white}~{git_branch}", &vars, &formatter);
+        // Literal should work, and space should appear since git_branch exists
+        assert!(result.contains(">>"));
+        assert!(result.contains("main"));
+    }
+
+    #[test]
+    fn test_regular_space_still_works() {
+        let vars = make_vars(&[("cwd", "/home/user"), ("git_branch", "")]);
+        let formatter = RawFormatter;
+
+        // Regular space (not ~) should always appear
+        let result = substitute_variables("{cwd} {git_branch}", &vars, &formatter);
+        assert_eq!(result, "/home/user "); // Space remains even though git_branch is empty
+    }
+
+    #[test]
+    fn test_extract_next_variable() {
+        // Test basic variable
+        let chars: Vec<char> = "{var}".chars().collect();
+        assert_eq!(extract_next_variable(&chars), Some("var".to_string()));
+
+        // Test variable with color
+        let chars: Vec<char> = "{var:red}".chars().collect();
+        assert_eq!(extract_next_variable(&chars), Some("var".to_string()));
+
+        // Test variable with whitespace before
+        let chars: Vec<char> = "  {var}".chars().collect();
+        assert_eq!(extract_next_variable(&chars), Some("var".to_string()));
+
+        // Test literal (should return None)
+        let chars: Vec<char> = "{\"text\":color}".chars().collect();
+        assert_eq!(extract_next_variable(&chars), None);
+
+        // Test no variable
+        let chars: Vec<char> = "no var here".chars().collect();
+        assert_eq!(extract_next_variable(&chars), None);
+
+        // Test environment variable
+        let chars: Vec<char> = "{$USER}".chars().collect();
+        assert_eq!(extract_next_variable(&chars), Some("$USER".to_string()));
+    }
+
+    #[test]
+    fn test_variable_has_value() {
+        let vars = make_vars(&[("key", "value"), ("empty", "")]);
+
+        // Regular variable with value
+        assert!(variable_has_value("key", &vars));
+
+        // Regular variable that's empty
+        assert!(!variable_has_value("empty", &vars));
+
+        // Regular variable that doesn't exist
+        assert!(!variable_has_value("missing", &vars));
+
+        // Environment variable (testing with a commonly available one)
+        std::env::set_var("TEST_VAR", "test_value");
+        assert!(variable_has_value("$TEST_VAR", &vars));
+
+        // Environment variable that's empty
+        std::env::set_var("TEST_VAR_EMPTY", "");
+        assert!(!variable_has_value("$TEST_VAR_EMPTY", &vars));
+
+        // Cleanup
+        std::env::remove_var("TEST_VAR");
+        std::env::remove_var("TEST_VAR_EMPTY");
     }
 }
