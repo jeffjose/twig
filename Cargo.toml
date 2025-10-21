@@ -1,27 +1,12 @@
-[package]
-name = "twig"
+[workspace]
+members = ["twig", "twigd"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
+authors = ["Your Name"]
+license = "MIT"
 
-[dependencies]
-chrono = { version = "0.4", features = ["serde"] }
-toml = "0.8"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-directories = "5.0"
-clap = { version = "4.4", features = ["derive"] }
-hostname = "0.3"
-local-ip-address = "0.5"
-colored = "2.1"
-tokio = { version = "1.36", features = ["full"] }
-futures = "0.3"
-rstest = "0.24.0"
-regex = "1.10"
-tempfile = "3.10"
-battery = "0.7.8"                                  # Cross-platform battery information
-lazy_static = "1.4"                                # For static initialization
-parking_lot = "0.12"                               # For fast, simple mutex
-libc = "0.2"                                       # For Unix system calls
-fs2 = "0.4"                                        # For file locking
-os_pipe = "1.1"                                    # For capturing stdout in tests
-glob = "0.3"                                       # For glob pattern matching
+[workspace.dependencies]
+# Shared dependencies will go here as we build
