@@ -51,6 +51,8 @@ impl GitProvider {
     }
 
     /// Check if working directory is dirty (has uncommitted changes)
+    /// Future enhancement: will be used when show_dirty config is implemented
+    #[allow(dead_code)]
     fn is_dirty(&self) -> bool {
         Command::new("git")
             .args(&["status", "--porcelain"])
@@ -60,6 +62,8 @@ impl GitProvider {
     }
 
     /// Get commits ahead/behind remote
+    /// Future enhancement: will be used when show_ahead_behind config is implemented
+    #[allow(dead_code)]
     fn get_ahead_behind(&self) -> Option<(u32, u32)> {
         let output = Command::new("git")
             .args(&["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])

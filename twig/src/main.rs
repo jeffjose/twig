@@ -2,24 +2,15 @@ mod config;
 mod providers;
 mod shell;
 
-use chrono::Local;
-use config::{Config, CwdConfig, GitConfig, HostnameConfig, PromptConfig, TimeConfig};
 use clap::Parser;
+use config::{Config, CwdConfig, HostnameConfig, PromptConfig, TimeConfig};
 use directories::ProjectDirs;
-use gethostname::gethostname;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 use shell::{get_formatter, ShellFormatter, ShellMode};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CachedData {
-    hostname: String,
-    timestamp: u64,
-}
 
 #[derive(Parser)]
 #[command(name = "twig")]
@@ -80,14 +71,6 @@ fn main() {
         return;
     }
 
-    // Get cache status for debug display
-    let cache_file = get_data_file_path();
-    let cache_status = if cache_file.exists() {
-        format!("{}", cache_file.display())
-    } else {
-        String::from("none")
-    };
-
     // Determine shell mode and output format
     let (shell_mode, show_box) = if let Some(mode) = &cli.mode {
         // --mode flag: use specified shell formatter, no box
@@ -127,7 +110,6 @@ fn main() {
         print_boxed(
             &output,
             &config_path,
-            &cache_status,
             config_time,
             render_time,
             total_time,
@@ -135,7 +117,7 @@ fn main() {
     } else if (cli.debug || std::env::var("TWIG_DEBUG").is_ok()) && cli.mode.is_some() {
         // Debug mode for shell integration: show debug info to stderr, prompt to stdout
         // Enabled via --debug flag or TWIG_DEBUG environment variable
-        print_debug_box(&config_path, &cache_status, config_time, render_time, total_time);
+        print_debug_box(&config_path, config_time, render_time, total_time);
         print!("{}", output);
     } else {
         // Shell integration or prompt mode: just the prompt, no newline
@@ -147,13 +129,12 @@ fn main() {
 fn print_boxed(
     prompt: &str,
     config_path: &PathBuf,
-    cache_status: &str,
     config_time: std::time::Duration,
     render_time: std::time::Duration,
     total_time: std::time::Duration,
 ) {
-    // Display config file path and cache status (dimmed, on one line)
-    println!("\x1b[2mConfig: {} | Cache: {}\x1b[0m", config_path.display(), cache_status);
+    // Display config file path (dimmed)
+    println!("\x1b[2mConfig: {}\x1b[0m", config_path.display());
     println!();
 
     // Split prompt into lines and strip ANSI codes from each
@@ -188,13 +169,11 @@ fn print_boxed(
 /// Print debug information in a classy box to stderr
 fn print_debug_box(
     config_path: &PathBuf,
-    cache_status: &str,
     config_time: std::time::Duration,
     render_time: std::time::Duration,
     total_time: std::time::Duration,
 ) {
     let config_str = format!("📄 Config: {}", config_path.display());
-    let cache_str = format!("💾 Cache:  {}", cache_status);
     let timing_str = format!(
         "⏱️  Timing: {:.2}ms (config: {:.2}ms | render: {:.2}ms)",
         total_time.as_secs_f64() * 1000.0,
@@ -212,9 +191,8 @@ fn print_debug_box(
     };
 
     let config_width = display_width(&config_str);
-    let cache_width = display_width(&cache_str);
     let timing_width = display_width(&timing_str);
-    let max_width = config_width.max(cache_width).max(timing_width).max(40);
+    let max_width = config_width.max(timing_width).max(40);
 
     // Top border (account for emoji in header)
     let header = "┌─ 🔍 twig debug ";
@@ -224,7 +202,6 @@ fn print_debug_box(
     // Content lines
     for (line, width) in [
         (&config_str, config_width),
-        (&cache_str, cache_width),
         (&timing_str, timing_width),
     ] {
         let padding = " ".repeat(max_width - width);
@@ -504,51 +481,4 @@ fn apply_implicit_sections(config: &mut Config, template: &str) {
             }
         }
     }
-}
-
-/// Read cached hostname from daemon (if available and fresh)
-/// Returns (hostname, from_cache) or None if cache is missing, stale, or invalid
-fn read_cached_hostname() -> Option<(String, bool)> {
-    let data_path = get_data_file_path();
-
-    // Try to read cache file
-    let contents = fs::read_to_string(&data_path).ok()?;
-
-    // Parse JSON
-    let cached: CachedData = serde_json::from_str(&contents).ok()?;
-
-    // Check if cache is fresh (less than 5 seconds old)
-    let current_time = current_timestamp();
-    let age = current_time.saturating_sub(cached.timestamp);
-
-    if age < 5 {
-        Some((cached.hostname, true)) // from cache
-    } else {
-        None // Cache is stale
-    }
-}
-
-/// Get data file path: ~/.local/share/twig/data.json
-fn get_data_file_path() -> PathBuf {
-    if let Some(proj_dirs) = ProjectDirs::from("", "", "twig") {
-        proj_dirs.data_dir().join("data.json")
-    } else {
-        // Fallback to ~/.local/share/twig/data.json
-        let mut path = std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."));
-        path.push(".local");
-        path.push("share");
-        path.push("twig");
-        path.push("data.json");
-        path
-    }
-}
-
-/// Get current Unix timestamp
-fn current_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("Time went backwards")
-        .as_secs()
 }

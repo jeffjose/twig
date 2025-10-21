@@ -8,10 +8,17 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ProviderError {
     CommandNotFound(String),
+    /// Future: will be used for command execution failures
+    #[allow(dead_code)]
     ExecutionFailed(String),
+    /// Future: will be used for missing resources (e.g., battery not found)
+    #[allow(dead_code)]
     ResourceNotAvailable(String),
+    /// Future: will be used for parsing failures
+    #[allow(dead_code)]
     ParseError(String),
 }
 
@@ -90,6 +97,8 @@ pub trait Provider {
     /// Others change frequently (git branch) and should be queried live.
     ///
     /// Default: false (query live)
+    /// Future: will be used when daemon caching is implemented
+    #[allow(dead_code)]
     fn cacheable(&self) -> bool {
         false
     }
@@ -99,6 +108,8 @@ pub trait Provider {
     /// Only used if cacheable() returns true.
     ///
     /// Default: 5 seconds
+    /// Future: will be used when daemon caching is implemented
+    #[allow(dead_code)]
     fn cache_duration(&self) -> u64 {
         5
     }
@@ -157,6 +168,8 @@ impl ProviderRegistry {
     }
 
     /// List all registered provider names
+    /// Future: will be used for diagnostic/debugging commands
+    #[allow(dead_code)]
     pub fn list_providers(&self) -> Vec<&str> {
         self.providers.keys().map(|s| s.as_str()).collect()
     }
@@ -195,6 +208,8 @@ impl ProviderRegistry {
     ///
     /// # Returns
     /// Result with HashMap of variables from specified providers
+    /// Future: will be used for performance optimization
+    #[allow(dead_code)]
     pub fn collect_from(
         &self,
         provider_names: &[&str],
@@ -225,6 +240,8 @@ impl ProviderRegistry {
     ///
     /// # Returns
     /// List of provider names needed
+    /// Future: will be used for performance optimization with collect_from
+    #[allow(dead_code)]
     pub fn determine_providers(&self, variables: &[&str]) -> Vec<&str> {
         let mut needed = std::collections::HashSet::new();
 
