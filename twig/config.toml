@@ -1,0 +1,9 @@
+[time]
+format = "%H:%M:%S"
+
+[hostname]
+
+[cwd]
+
+[prompt]
+format = '{time:cyan} {"@":yellow,bold} {host:magenta} {dir:green} {"$":white,bold} '
