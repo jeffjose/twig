@@ -237,18 +237,25 @@
 **Goal**: Work perfectly with different shells
 
 ### Shell Modes
-- [ ] Standard ANSI escape codes (bash, zsh, fish)
+- [x] Standard ANSI escape codes (bash, zsh, fish) - current default
 - [ ] TCSH-specific formatting with `%{...%}` wrapping
 - [ ] Mode selection via `--mode` flag
 - [ ] Proper ANSI code wrapping per line
+- [ ] Extensible architecture for future shell support
 
 ### Shell Integration
-- [ ] Works with bash
-- [ ] Works with zsh
-- [ ] Works with fish
-- [ ] Works with tcsh
+- [x] Works with bash (default)
+- [ ] Works with zsh (default should work)
+- [ ] Works with fish (default should work)
+- [ ] Works with tcsh (needs `--mode tcsh`)
 
-**Deliverable**: `twig --mode tcsh` works correctly in tcsh prompts
+### Architecture
+- [ ] Shell output formatter abstraction
+- [ ] Separate module per shell (tcsh.rs, bash.rs, etc.)
+- [ ] Factory pattern for shell mode selection
+- [ ] `--mode` flag takes priority over `--prompt`
+
+**Deliverable**: `twig --mode tcsh` outputs tcsh-compatible prompt with `%{...%}` wrapped ANSI codes
 
 ---
 
@@ -487,12 +494,19 @@
 - [ ] Time format validation
 - [ ] Timezone support
 
+### 🔨 Phase 10 In Progress (Shell-Specific Output)
+- [ ] TCSH formatter with `%{...%}` wrapping
+- [ ] `--mode` flag (tcsh, bash, zsh)
+- [ ] Extensible shell formatter architecture
+- [ ] Separate modules for future shells
+
 ### 🎯 Next Steps (Breadth-First Approach)
 
 **Missing Moving Pieces** (core architectural components):
-1. **Git Provider** (Phase 5) - Branch name, dirty status
-2. **IP Provider** (Phase 6) - Basic IPv4/IPv6
-3. **CLI Interface** (Phase 7) - --help, --version, --colors
-4. **Battery Provider** (Phase 8) - Basic percentage and status
+1. **Shell Output Formatting** (Phase 10) - **IN PROGRESS** - TCSH support
+2. **Git Provider** (Phase 5) - Branch name, dirty status
+3. **IP Provider** (Phase 6) - Basic IPv4/IPv6
+4. **CLI Interface** (Phase 7) - --help, --version, --colors
+5. **Battery Provider** (Phase 8) - Basic percentage and status
 
-**Recommendation**: Implement the missing data providers first (git, ip, battery) to get all the core moving pieces in place, then polish the CLI interface.
+**Current Focus**: TCSH shell support to establish shell-agnostic output architecture.
