@@ -1,3 +1,20 @@
+# Example configuration for twig prompt generator
+#
+# Variable Resolution Rules:
+# 1. Implicit sections: Using {cwd} in template auto-creates [cwd] section
+# 2. Default names: [hostname] without name field creates {hostname} variable
+# 3. Custom names: [cwd] with name="mydir" creates {mydir} variable instead
+#
+# Variable Types:
+# - Config variables: {time}, {hostname}, {cwd}
+# - Environment variables: {$USER}, {$HOME}, etc.
+# - Literal text: {"@":yellow}
+#
+# Styling: {var:color} or {var:color,style}
+# Colors: black, red, green, yellow, blue, magenta, cyan, white
+#         bright_black, bright_red, etc.
+# Styles: bold, italic, underline
+
 [time]
 format = "%H:%M:%S"
 
@@ -6,7 +23,5 @@ format = "%H:%M:%S"
 [cwd]
 
 [prompt]
-# Section names = variable names: {time}, {hostname}, {cwd}
-# Environment variables: {$USER}, {$HOME}, etc.
 format = '''{time:cyan} {$USER:bright_green,bold}@{hostname:magenta} {cwd:green}
 {"$":white,bold} '''

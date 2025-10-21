@@ -41,15 +41,23 @@ struct Config {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct TimeConfig {
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default = "default_time_format")]
     format: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct HostnameConfig {}
+struct HostnameConfig {
+    #[serde(default)]
+    name: Option<String>,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
-struct CwdConfig {}
+struct CwdConfig {
+    #[serde(default)]
+    name: Option<String>,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 struct PromptConfig {
@@ -67,7 +75,28 @@ fn main() {
 
     // Load config from file (or create default)
     let config_start = Instant::now();
-    let (config, config_path) = load_config(cli.config.as_deref());
+    let (mut config, config_path) = load_config(cli.config.as_deref());
+
+    // Discover variables from template and create implicit sections
+    let needed_vars = discover_variables(&config.prompt.format);
+    for var in needed_vars {
+        match var.as_str() {
+            "time" if config.time.is_none() => {
+                config.time = Some(TimeConfig {
+                    name: None,
+                    format: default_time_format(),
+                });
+            }
+            "hostname" if config.hostname.is_none() => {
+                config.hostname = Some(HostnameConfig { name: None });
+            }
+            "cwd" if config.cwd.is_none() => {
+                config.cwd = Some(CwdConfig { name: None });
+            }
+            _ => {} // Unknown variables or already configured
+        }
+    }
+
     let config_time = config_start.elapsed();
 
     // Collect all variables
@@ -77,7 +106,8 @@ fn main() {
     // Get current time with format from config
     if let Some(time_config) = &config.time {
         let time = Local::now().format(&time_config.format).to_string();
-        variables.insert("time", time);
+        let var_name = time_config.name.as_deref().unwrap_or("time");
+        variables.insert(var_name, time);
     }
 
     // Get hostname if configured
@@ -88,7 +118,7 @@ fn main() {
         String::from("none")
     };
 
-    if config.hostname.is_some() {
+    if let Some(hostname_config) = &config.hostname {
         // Try to read from daemon cache first
         let hostname = read_cached_hostname()
             .map(|(host, _from_cache)| host)
@@ -97,16 +127,18 @@ fn main() {
                     .to_string_lossy()
                     .to_string()
             });
-        variables.insert("hostname", hostname);  // Section name = variable name
+        let var_name = hostname_config.name.as_deref().unwrap_or("hostname");
+        variables.insert(var_name, hostname);
     }
 
     // Get current working directory if configured
-    if config.cwd.is_some() {
+    if let Some(cwd_config) = &config.cwd {
         let cwd = std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("?"))
             .to_string_lossy()
             .to_string();
-        variables.insert("cwd", cwd);  // Section name = variable name
+        let var_name = cwd_config.name.as_deref().unwrap_or("cwd");
+        variables.insert(var_name, cwd);
     }
 
     // Perform variable substitution with color support
@@ -236,10 +268,11 @@ fn get_config_path() -> PathBuf {
 fn create_default_config() -> Config {
     Config {
         time: Some(TimeConfig {
+            name: None,
             format: "%H:%M:%S".to_string(),
         }),
-        hostname: Some(HostnameConfig {}),
-        cwd: Some(CwdConfig {}),
+        hostname: Some(HostnameConfig { name: None }),
+        cwd: Some(CwdConfig { name: None }),
         prompt: PromptConfig {
             format: "{time:cyan} {\"@\":yellow,bold} {hostname:magenta} {cwd:green} {\"$\":white,bold} ".to_string(),
         },
@@ -372,6 +405,35 @@ fn get_ansi_code(name: &str) -> Option<&'static str> {
 
         _ => None,
     }
+}
+
+/// Discover all variables used in a template (excluding $ENV vars and literals)
+fn discover_variables(template: &str) -> Vec<String> {
+    let re = Regex::new(r"\{([^}]+)\}").unwrap();
+    let mut vars = Vec::new();
+
+    for cap in re.captures_iter(template) {
+        let content = &cap[1];
+
+        // Skip literals ("text":color)
+        if content.starts_with('"') {
+            continue;
+        }
+
+        // Skip environment variables ($VAR)
+        if content.starts_with('$') {
+            continue;
+        }
+
+        // Extract variable name (before any : for colors)
+        let var_name = content.split(':').next().unwrap();
+
+        if !vars.contains(&var_name.to_string()) {
+            vars.push(var_name.to_string());
+        }
+    }
+
+    vars
 }
 
 /// Read cached hostname from daemon (if available and fresh)
