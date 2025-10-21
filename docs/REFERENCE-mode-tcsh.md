@@ -251,6 +251,67 @@ Every ANSI code should be wrapped:
    - Press down arrow to go forward
    - If history is garbled, prompt width calculation is broken
 
+## Critical Edge Cases
+
+### Edge Case 1: `%}` Immediately Followed by `\n`
+
+**The Problem:**
+When a prompt ends with a colored item followed immediately by a newline, TCSH fails to parse the newline correctly:
+
+```toml
+# This format causes the bug:
+format = '''-({time:cyan} {hostname:magenta} {cwd:green}
+{"$":white,bold} '''
+```
+
+This generates: `%{\x1b[32m%}/path%{\x1b[0m%}\n$`
+
+The pattern `%}\n` (closing non-printing marker immediately followed by literal newline) causes TCSH to ignore the `\n`, rendering the entire prompt on one line instead of two.
+
+**Why It Happens:**
+TCSH's prompt parser doesn't recognize `\n` as an escape sequence when it directly follows `%}`. The closing marker seems to "consume" or interfere with the newline parsing.
+
+**The Fix:**
+Insert a space between `%}` and `\n`:
+
+```rust
+// In finalize() method:
+output.replace("%}\\n", "%} \\n")
+```
+
+This transforms:
+- **Before:** `twig%{\x1b[0m%}\n$ ` (broken - one line)
+- **After:** `twig%{\x1b[0m%} \n$ ` (fixed - two lines)
+
+**The Solution Works Because:**
+The trailing space is invisible (it's at the end of a line) but provides the separation TCSH needs to correctly parse the `\n` escape sequence.
+
+**Visual Comparison:**
+```bash
+# Broken (missing newline):
+-(00:15:28 skyfall /home/jeffjose/scripts/twig$
+
+# Fixed (proper two lines):
+-(00:15:21 skyfall /home/jeffjose/scripts/twig)-
+$
+```
+
+**Hex Dump Analysis:**
+```bash
+# Broken: %} immediately followed by \n
+00000060:  ...twig%{ESC[0m%}\n...
+                           ^^^^^ - TCSH ignores this \n
+
+# Fixed: %} followed by space then \n
+00000060:  ...twig%{ESC[0m%} \n...
+                           ^^^^^^ - TCSH correctly parses this \n
+```
+
+**Implementation:**
+This fix is automatically applied in `tcsh.rs` and `zsh.rs` by the `finalize()` method. No user action required.
+
+---
+
 ## Common Mistakes
 
 ### Mistake 1: Raw ANSI codes
@@ -329,6 +390,7 @@ When implementing TCSH prompt generation:
 - [ ] Test in actual TCSH shell with cursor movement
 - [ ] Test with long commands to verify line wrapping
 - [ ] Test multiline prompts render on separate lines
+- [ ] Handle edge case: insert space before `\n` when preceded by `%}`
 
 ## Debugging
 
@@ -337,8 +399,12 @@ When implementing TCSH prompt generation:
 **Fix:** Every `\x1b[...m` must be inside `%{...%}`
 
 ### Symptom: Prompt is all on one line
-**Cause:** Real newline byte instead of literal `\n`
-**Fix:** Use `output.replace('\n', "\\n")` in finalize()
+**Possible Causes:**
+1. Real newline byte instead of literal `\n`
+   - **Fix:** Use `output.replace('\n', "\\n")` in finalize()
+2. `%}` immediately followed by `\n` (edge case)
+   - **Fix:** Insert space between them: `%} \n` instead of `%}\n`
+   - See "Critical Edge Cases" section above for details
 
 ### Symptom: Colors bleed into typed commands
 **Cause:** Missing reset code or reset not wrapped
