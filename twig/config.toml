@@ -15,12 +15,17 @@
 #         bright_black, bright_red, etc.
 # Styles: bold, italic, underline
 
-[time]
-format = "%H:%M:%S"
-
-[hostname]
-
-[cwd]
+# Sections are created implicitly from template variables
+# Uncomment to customize behavior:
+#
+# [time]
+# format = "%H:%M:%S"  # default format
+#
+# [hostname]
+# name = "host"  # use {host} instead of {hostname}
+#
+# [cwd]
+# name = "dir"  # use {dir} instead of {cwd}
 
 [prompt]
 format = '''{time:cyan} {$USER:bright_green,bold}@{hostname:magenta} {cwd:green}
