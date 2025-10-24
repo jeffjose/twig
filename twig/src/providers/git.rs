@@ -45,7 +45,12 @@ impl GitProvider {
         }
 
         let text = String::from_utf8_lossy(&output.stdout);
+        Self::parse_git_status(&text)
+    }
 
+    /// Parse git status --porcelain=v2 --branch output
+    /// Extracted for testability
+    fn parse_git_status(text: &str) -> Option<(String, Option<String>, u32, u32, usize, usize)> {
         let mut branch = String::from("HEAD"); // Default for detached HEAD
         let mut upstream: Option<String> = None;
         let mut ahead: u32 = 0;
@@ -228,5 +233,93 @@ mod tests {
         assert_eq!(provider.name(), "git");
         assert_eq!(provider.sections(), vec!["git"]);
         assert!(!provider.cacheable());
+    }
+
+    #[test]
+    fn test_parse_git_status_clean() {
+        let output = "\
+# branch.oid abc123
+# branch.head main
+# branch.upstream origin/main
+# branch.ab +0 -0
+";
+        let result = GitProvider::parse_git_status(output);
+        assert_eq!(result, Some(("main".to_string(), Some("origin/main".to_string()), 0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn test_parse_git_status_ahead() {
+        let output = "\
+# branch.oid abc123
+# branch.head main
+# branch.upstream origin/main
+# branch.ab +2 -0
+";
+        let result = GitProvider::parse_git_status(output);
+        assert_eq!(result, Some(("main".to_string(), Some("origin/main".to_string()), 2, 0, 0, 0)));
+    }
+
+    #[test]
+    fn test_parse_git_status_behind() {
+        let output = "\
+# branch.oid abc123
+# branch.head main
+# branch.upstream origin/main
+# branch.ab +0 -3
+";
+        let result = GitProvider::parse_git_status(output);
+        assert_eq!(result, Some(("main".to_string(), Some("origin/main".to_string()), 0, 3, 0, 0)));
+    }
+
+    #[test]
+    fn test_parse_git_status_with_staged_files() {
+        let output = "\
+# branch.oid abc123
+# branch.head main
+# branch.upstream origin/main
+# branch.ab +0 -0
+1 A. N... 000000 100644 100644 0000000000000000000000000000000000000000 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 file1.txt
+1 M. N... 100644 100644 100644 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 file2.txt
+";
+        let result = GitProvider::parse_git_status(output);
+        assert_eq!(result, Some(("main".to_string(), Some("origin/main".to_string()), 0, 0, 2, 0)));
+    }
+
+    #[test]
+    fn test_parse_git_status_with_untracked_files() {
+        let output = "\
+# branch.oid abc123
+# branch.head main
+# branch.upstream origin/main
+# branch.ab +0 -0
+? untracked1.txt
+? untracked2.txt
+";
+        let result = GitProvider::parse_git_status(output);
+        assert_eq!(result, Some(("main".to_string(), Some("origin/main".to_string()), 0, 0, 0, 2)));
+    }
+
+    #[test]
+    fn test_parse_git_status_mixed() {
+        let output = "\
+# branch.oid abc123
+# branch.head feature-branch
+# branch.upstream origin/feature-branch
+# branch.ab +1 -2
+1 A. N... 000000 100644 100644 0000000000000000000000000000000000000000 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 staged.txt
+? untracked.txt
+";
+        let result = GitProvider::parse_git_status(output);
+        assert_eq!(result, Some(("feature-branch".to_string(), Some("origin/feature-branch".to_string()), 1, 2, 1, 1)));
+    }
+
+    #[test]
+    fn test_parse_git_status_no_upstream() {
+        let output = "\
+# branch.oid abc123
+# branch.head local-branch
+";
+        let result = GitProvider::parse_git_status(output);
+        assert_eq!(result, Some(("local-branch".to_string(), None, 0, 0, 0, 0)));
     }
 }
