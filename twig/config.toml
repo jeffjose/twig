@@ -32,7 +32,7 @@
 # name = "dir"  # use {dir} instead of {cwd}
 
 # Git Variables (all variables share 'git' prefix for auto-detection):
-# - {git_branch} - current branch name (e.g., "main", "dev") [yellow]
+# - {git_branch} - current branch name (e.g., "main", "dev") [magenta]
 # - {git_tracking} - ahead/behind status (e.g., "(ahead.2)", "(behind.3)") [magenta]
 # - {git_status} - working tree status (":✔" clean, ":+N" for changes) [green/yellow]
 # - {git_elapsed} - time since last commit (e.g., ":2s", ":5m", ":17h") [dim]

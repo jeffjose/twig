@@ -184,15 +184,15 @@ impl Provider for GitProvider {
             return Ok(vars);
         }
 
-        // Get branch name with yellow color
+        // Get branch name with magenta color
         let branch = if let Some(branch) = self.get_branch() {
             branch
         } else {
             "HEAD".to_string() // Detached HEAD
         };
 
-        // Variable: {git_branch} = branch name (yellow)
-        vars.insert("git_branch".to_string(), format!("\x1b[33m{}\x1b[0m", branch));
+        // Variable: {git_branch} = branch name (magenta)
+        vars.insert("git_branch".to_string(), format!("\x1b[35m{}\x1b[0m", branch));
 
         // Get ahead/behind status with magenta color
         if let Some((ahead, behind)) = self.get_ahead_behind() {
