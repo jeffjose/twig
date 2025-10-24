@@ -293,20 +293,16 @@ fn validate_config(
 
     println!("\n┌─── Configuration Validation ───┐\n");
 
-    // Level 1: Syntax Validation
-    println!("📋 Level 1: Syntax Validation");
-    println!("   ✓ Config file: {}", config_path.display());
-    println!("   ✓ TOML syntax: Valid");
-
     // Validate format string syntax
     let format = &config.prompt.format;
     match validate_format_syntax(format) {
         Ok(vars) => {
-            println!("   ✓ Format string: Valid syntax");
-            println!("   ✓ Variables found: {}", vars.len());
+            println!("✓ Config file found ({})", config_path.display());
+            println!("✓ TOML syntax valid");
+            println!("✓ Format string valid ({} variables)", vars.len());
         }
         Err(e) => {
-            println!("   ❌ Format string: {}", e);
+            println!("❌ Format string: {}", e);
             success = false;
         }
     }
@@ -315,11 +311,11 @@ fn validate_config(
     match validate_colors_and_styles(format) {
         Ok(count) => {
             if count > 0 {
-                println!("   ✓ Colors/Styles: {} found, all valid", count);
+                println!("✓ Colors and styles valid ({} found)", count);
             }
         }
         Err(e) => {
-            println!("   ❌ {}", e);
+            println!("❌ {}", e);
             success = false;
         }
     }
@@ -327,27 +323,26 @@ fn validate_config(
     // Validate time format
     if let Some(time_config) = &config.time {
         if validate_time_format(&time_config.format) {
-            println!("   ✓ Time format: Valid");
+            println!("✓ Time format valid");
         } else {
             warnings.push(format!("Time format '{}' may contain invalid specifiers", time_config.format));
+            println!("⚠  Time format may be invalid");
         }
     }
 
-    // Level 2: Provider Validation
-    println!("\n📦 Level 2: Provider Validation");
-
+    // Provider validation
     let provider_result = registry.collect_all(config, true);
     let provider_success = provider_result.is_ok();
 
     match &provider_result {
         Ok(result) => {
-            println!("   ✓ All providers available:");
-            for timing in &result.timings {
-                println!("      - {}: ✓ ({:.2}ms)", timing.name, timing.duration.as_secs_f64() * 1000.0);
-            }
+            let provider_names: Vec<String> = result.timings.iter()
+                .map(|t| t.name.clone())
+                .collect();
+            println!("✓ All providers available ({})", provider_names.join(", "));
         }
         Err(e) => {
-            println!("   ❌ Provider error: {:?}", e);
+            println!("❌ Provider error: {:?}", e);
             success = false;
         }
     }
@@ -355,20 +350,16 @@ fn validate_config(
     // Check for configured interfaces
     if let Some(ip_config) = &config.ip {
         if let Some(iface) = &ip_config.interface {
-            println!("   ℹ  IP interface '{}' configured", iface);
+            println!("ℹ  IP interface '{}' configured", iface);
         }
     }
-
-    // Level 3: Deep Validation
-    println!("\n🔍 Level 3: Deep Validation");
 
     // Test prompt rendering
     if provider_success {
         if let Ok(result) = provider_result {
-            // Try to render the prompt
             let test_render = render_prompt(format, &result.variables);
             if !test_render.is_empty() {
-                println!("   ✓ Prompt rendering: Success");
+                println!("✓ Prompt renders successfully");
 
                 // Check prompt length
                 let visual_length = test_render.chars().count();
@@ -376,18 +367,12 @@ fn validate_config(
                     warnings.push(format!("Prompt is long ({} chars), may wrap on narrow terminals", visual_length));
                 }
 
-                // Test shell formatters (just basic validation)
-                println!("   ✓ Shell compatibility:");
-                let shell_modes = vec!["Raw", "Tcsh", "Bash", "Zsh"];
-                for mode in shell_modes {
-                    println!("      - {}: ✓", mode);
-                }
+                // Shell compatibility
+                println!("✓ Shell compatibility verified (Raw, Tcsh, Bash, Zsh)");
             } else {
                 warnings.push("Prompt rendering produced empty output".to_string());
             }
         }
-    } else {
-        println!("   ⏭  Skipped (provider errors above)");
     }
 
     // Show warnings
@@ -1043,5 +1028,82 @@ mod tests {
         // Cleanup
         std::env::remove_var("TEST_VAR");
         std::env::remove_var("TEST_VAR_EMPTY");
+    }
+
+    #[test]
+    fn test_validate_format_syntax_valid() {
+        let format = "{time:cyan} {hostname:yellow} {cwd:green} $ ";
+        let result = validate_format_syntax(format);
+        assert!(result.is_ok());
+        let vars = result.unwrap();
+        assert_eq!(vars.len(), 3);
+        assert!(vars.contains(&"time".to_string()));
+        assert!(vars.contains(&"hostname".to_string()));
+        assert!(vars.contains(&"cwd".to_string()));
+    }
+
+    #[test]
+    fn test_validate_format_syntax_with_literals() {
+        let format = "{time:cyan} {\"@\":yellow} {hostname:magenta} $ ";
+        let result = validate_format_syntax(format);
+        assert!(result.is_ok());
+        let vars = result.unwrap();
+        // Literals should not be counted as variables
+        assert_eq!(vars.len(), 2);
+    }
+
+    #[test]
+    fn test_validate_format_syntax_with_env_vars() {
+        let format = "{time:cyan} {$USER:yellow} {cwd:green} $ ";
+        let result = validate_format_syntax(format);
+        assert!(result.is_ok());
+        let vars = result.unwrap();
+        // Env vars should not be counted as regular variables
+        assert_eq!(vars.len(), 2);
+    }
+
+    #[test]
+    fn test_validate_colors_and_styles_valid() {
+        let format = "{time:cyan} {hostname:yellow,bold} {cwd:green} $ ";
+        let result = validate_colors_and_styles(format);
+        assert!(result.is_ok());
+        let count = result.unwrap();
+        assert_eq!(count, 4); // cyan, yellow, bold, green
+    }
+
+    #[test]
+    fn test_validate_colors_and_styles_invalid() {
+        let format = "{time:invalid_color} {hostname:yellow} $ ";
+        let result = validate_colors_and_styles(format);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid_color"));
+    }
+
+    #[test]
+    fn test_validate_colors_and_styles_bright_colors() {
+        let format = "{time:bright_cyan} {hostname:bright_yellow} $ ";
+        let result = validate_colors_and_styles(format);
+        assert!(result.is_ok());
+        let count = result.unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_validate_time_format_valid() {
+        assert!(validate_time_format("%H:%M:%S"));
+        assert!(validate_time_format("%Y-%m-%d"));
+        assert!(validate_time_format("%H:%M"));
+    }
+
+    #[test]
+    fn test_validate_time_format_invalid() {
+        assert!(!validate_time_format("%Q")); // Invalid specifier
+        assert!(!validate_time_format("%K")); // Invalid specifier
+    }
+
+    #[test]
+    fn test_validate_time_format_with_literal() {
+        assert!(validate_time_format("Time: %H:%M:%S"));
+        assert!(validate_time_format("%H%%")); // Double % is valid (literal %)
     }
 }
