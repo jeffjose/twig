@@ -1,6 +1,6 @@
 // twig/src/providers/battery.rs
 
-use super::{Provider, ProviderError, ProviderResult};
+use super::{Provider, ProviderResult};
 use crate::config::Config;
 use battery::{Manager, State};
 use serde_json::{json, Value};
@@ -48,23 +48,14 @@ impl Provider for BatteryProvider {
         vec!["battery"]
     }
 
-    fn collect(&self, _config: &Config, validate: bool) -> ProviderResult<HashMap<String, String>> {
+    fn collect(&self, _config: &Config, _validate: bool) -> ProviderResult<HashMap<String, String>> {
         let mut vars = HashMap::new();
 
-        match self.get_battery_info() {
-            Some((percentage, status)) => {
-                vars.insert("battery_percentage".to_string(), format!("{}%", percentage));
-                vars.insert("battery_status".to_string(), status);
-            }
-            None => {
-                // No battery found (desktop, or error)
-                if validate {
-                    return Err(ProviderError::ResourceNotAvailable(
-                        "No battery found".to_string(),
-                    ));
-                }
-                // Silent failure in non-validate mode (common for desktops)
-            }
+        // Get battery info if available
+        // Returns empty vars if no battery (common for desktops)
+        if let Some((percentage, status)) = self.get_battery_info() {
+            vars.insert("battery_percentage".to_string(), format!("{}%", percentage));
+            vars.insert("battery_status".to_string(), status);
         }
 
         Ok(vars)
