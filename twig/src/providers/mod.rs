@@ -216,6 +216,9 @@ impl ProviderRegistry {
             }
         }
 
+        // Sort timings by provider name for consistent output
+        timings.sort_by(|a, b| a.name.cmp(&b.name));
+
         Ok(CollectResult { variables, timings })
     }
 
