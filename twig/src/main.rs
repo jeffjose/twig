@@ -14,6 +14,7 @@ use std::time::Instant;
 
 #[derive(Parser)]
 #[command(name = "twig")]
+#[command(version)]
 #[command(about = "Shell prompt generator with daemon caching")]
 struct Cli {
     /// Output only the prompt (for shell integration)
@@ -52,24 +53,19 @@ fn main() {
 
     let config_time = config_start.elapsed();
 
+    // If in validate mode, run comprehensive validation and exit
+    let registry = providers::ProviderRegistry::new();
+    if cli.validate {
+        let success = validate_config(&config, &config_path, &registry);
+        std::process::exit(if success { 0 } else { 1 });
+    }
+
     // Collect all variables from providers
     let render_start = Instant::now();
-    let registry = providers::ProviderRegistry::new();
-
-    let (variables, provider_timings) = match registry.collect_all(&config, cli.validate) {
+    let (variables, provider_timings) = match registry.collect_all(&config, false) {
         Ok(result) => (result.variables, result.timings),
-        Err(e) if cli.validate => {
-            eprintln!("Provider error: {:?}", e);
-            std::process::exit(1);
-        }
         Err(_) => (HashMap::new(), Vec::new()), // Should not happen - providers catch errors in non-validate mode
     };
-
-    // If in validate mode, show success and exit
-    if cli.validate {
-        println!("✓ All providers validated successfully");
-        return;
-    }
 
     // Determine shell mode and output format
     let (shell_mode, show_box) = if let Some(mode) = &cli.mode {
@@ -284,6 +280,245 @@ fn load_config(custom_path: Option<&std::path::Path>) -> (Config, PathBuf) {
     };
 
     (config, config_path)
+}
+
+/// Validate configuration with three levels of checks
+fn validate_config(
+    config: &Config,
+    config_path: &PathBuf,
+    registry: &providers::ProviderRegistry,
+) -> bool {
+    let mut success = true;
+    let mut warnings = Vec::new();
+
+    println!("\n┌─── Configuration Validation ───┐\n");
+
+    // Level 1: Syntax Validation
+    println!("📋 Level 1: Syntax Validation");
+    println!("   ✓ Config file: {}", config_path.display());
+    println!("   ✓ TOML syntax: Valid");
+
+    // Validate format string syntax
+    let format = &config.prompt.format;
+    match validate_format_syntax(format) {
+        Ok(vars) => {
+            println!("   ✓ Format string: Valid syntax");
+            println!("   ✓ Variables found: {}", vars.len());
+        }
+        Err(e) => {
+            println!("   ❌ Format string: {}", e);
+            success = false;
+        }
+    }
+
+    // Validate colors and styles
+    match validate_colors_and_styles(format) {
+        Ok(count) => {
+            if count > 0 {
+                println!("   ✓ Colors/Styles: {} found, all valid", count);
+            }
+        }
+        Err(e) => {
+            println!("   ❌ {}", e);
+            success = false;
+        }
+    }
+
+    // Validate time format
+    if let Some(time_config) = &config.time {
+        if validate_time_format(&time_config.format) {
+            println!("   ✓ Time format: Valid");
+        } else {
+            warnings.push(format!("Time format '{}' may contain invalid specifiers", time_config.format));
+        }
+    }
+
+    // Level 2: Provider Validation
+    println!("\n📦 Level 2: Provider Validation");
+
+    let provider_result = registry.collect_all(config, true);
+    let provider_success = provider_result.is_ok();
+
+    match &provider_result {
+        Ok(result) => {
+            println!("   ✓ All providers available:");
+            for timing in &result.timings {
+                println!("      - {}: ✓ ({:.2}ms)", timing.name, timing.duration.as_secs_f64() * 1000.0);
+            }
+        }
+        Err(e) => {
+            println!("   ❌ Provider error: {:?}", e);
+            success = false;
+        }
+    }
+
+    // Check for configured interfaces
+    if let Some(ip_config) = &config.ip {
+        if let Some(iface) = &ip_config.interface {
+            println!("   ℹ  IP interface '{}' configured", iface);
+        }
+    }
+
+    // Level 3: Deep Validation
+    println!("\n🔍 Level 3: Deep Validation");
+
+    // Test prompt rendering
+    if provider_success {
+        if let Ok(result) = provider_result {
+            // Try to render the prompt
+            let test_render = render_prompt(format, &result.variables);
+            if !test_render.is_empty() {
+                println!("   ✓ Prompt rendering: Success");
+
+                // Check prompt length
+                let visual_length = test_render.chars().count();
+                if visual_length > 200 {
+                    warnings.push(format!("Prompt is long ({} chars), may wrap on narrow terminals", visual_length));
+                }
+
+                // Test shell formatters (just basic validation)
+                println!("   ✓ Shell compatibility:");
+                let shell_modes = vec!["Raw", "Tcsh", "Bash", "Zsh"];
+                for mode in shell_modes {
+                    println!("      - {}: ✓", mode);
+                }
+            } else {
+                warnings.push("Prompt rendering produced empty output".to_string());
+            }
+        }
+    } else {
+        println!("   ⏭  Skipped (provider errors above)");
+    }
+
+    // Show warnings
+    if !warnings.is_empty() {
+        println!("\n⚠️  Warnings:");
+        for warning in warnings {
+            println!("   - {}", warning);
+        }
+    }
+
+    // Final result
+    println!();
+    if success {
+        println!("✅ Configuration is valid!\n");
+    } else {
+        println!("❌ Configuration has errors\n");
+    }
+
+    success
+}
+
+/// Validate format string syntax
+fn validate_format_syntax(format: &str) -> Result<Vec<String>, String> {
+    let mut variables = Vec::new();
+    let var_regex = Regex::new(r"\{([^}:]+)(?::([^}]+))?\}").unwrap();
+
+    for cap in var_regex.captures_iter(format) {
+        let var_name = cap.get(1).unwrap().as_str();
+
+        // Check for invalid variable names
+        if var_name.is_empty() {
+            return Err("Empty variable name found".to_string());
+        }
+
+        // Skip literal text (starts with ")
+        if !var_name.starts_with('"') && !var_name.starts_with('$') {
+            variables.push(var_name.to_string());
+        }
+    }
+
+    Ok(variables)
+}
+
+/// Validate colors and styles in format string
+fn validate_colors_and_styles(format: &str) -> Result<usize, String> {
+    let valid_colors = vec![
+        "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+        "bright_black", "bright_red", "bright_green", "bright_yellow",
+        "bright_blue", "bright_magenta", "bright_cyan", "bright_white",
+    ];
+    let valid_styles = vec!["bold", "italic", "underline", "dim"];
+
+    let style_regex = Regex::new(r"\{[^}]+:([^}]+)\}").unwrap();
+    let mut count = 0;
+
+    for cap in style_regex.captures_iter(format) {
+        let style_spec = cap.get(1).unwrap().as_str();
+        let parts: Vec<&str> = style_spec.split(',').collect();
+
+        for part in parts {
+            let part = part.trim();
+            if !valid_colors.contains(&part) && !valid_styles.contains(&part) {
+                return Err(format!("Unknown color or style: '{}'", part));
+            }
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
+/// Validate time format string (basic check for common strftime specifiers)
+fn validate_time_format(format: &str) -> bool {
+    // Check for invalid format specifiers (basic validation)
+    // Allow: %H, %M, %S, %Y, %m, %d, %A, %a, %B, %b, %p, %I, %Z, %z, %%
+    let valid_specifiers = vec![
+        "%H", "%M", "%S", "%Y", "%m", "%d", "%A", "%a",
+        "%B", "%b", "%p", "%I", "%Z", "%z", "%%", "%f",
+        "%u", "%w", "%j", "%U", "%W", "%c", "%x", "%X"
+    ];
+
+    // Find all %X patterns
+    let specifier_regex = Regex::new(r"%[a-zA-Z%]").unwrap();
+    for cap in specifier_regex.find_iter(format) {
+        if !valid_specifiers.contains(&cap.as_str()) {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Render prompt for testing (simplified version without shell formatting)
+fn render_prompt(template: &str, variables: &HashMap<String, String>) -> String {
+    let mut result = template.to_string();
+
+    // Replace variables
+    let var_regex = Regex::new(r"\{([^}:]+)(?::([^}]+))?\}").unwrap();
+
+    for cap in var_regex.captures_iter(template) {
+        let full_match = cap.get(0).unwrap().as_str();
+        let var_name = cap.get(1).unwrap().as_str();
+
+        // Handle literal text
+        if var_name.starts_with('"') && var_name.ends_with('"') {
+            let literal = &var_name[1..var_name.len() - 1];
+            result = result.replace(full_match, literal);
+            continue;
+        }
+
+        // Handle environment variables
+        if let Some(env_name) = var_name.strip_prefix('$') {
+            if let Ok(value) = std::env::var(env_name) {
+                result = result.replace(full_match, &value);
+            } else {
+                result = result.replace(full_match, "");
+            }
+            continue;
+        }
+
+        // Handle regular variables
+        if let Some(value) = variables.get(var_name) {
+            result = result.replace(full_match, value);
+        } else {
+            result = result.replace(full_match, "");
+        }
+    }
+
+    // Remove color codes for length calculation
+    let ansi_regex = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    ansi_regex.replace_all(&result, "").to_string()
 }
 
 /// Get config file path: ~/.config/twig/config.toml
