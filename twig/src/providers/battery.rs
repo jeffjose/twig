@@ -14,8 +14,8 @@ impl BatteryProvider {
     }
 
     /// Get battery information
-    /// Returns (percentage, status) where status is "Charging", "Discharging", "Full", etc.
-    fn get_battery_info(&self) -> Option<(u8, String)> {
+    /// Returns (percentage, status, power) where power is in watts (positive=charging, negative=discharging)
+    fn get_battery_info(&self) -> Option<(u8, String, Option<String>)> {
         // Create battery manager
         let manager = Manager::new().ok()?;
 
@@ -35,7 +35,19 @@ impl BatteryProvider {
             _ => "Unknown",
         };
 
-        Some((percentage, status.to_string()))
+        // Get power draw (watts)
+        let power = {
+            let rate = battery.energy_rate();
+            let watts = rate.get::<battery::units::power::watt>();
+            if watts.abs() > 0.1 {
+                // Format with sign: +45W (charging) or -15W (discharging)
+                Some(format!("{:+.1}W", watts))
+            } else {
+                None
+            }
+        };
+
+        Some((percentage, status.to_string(), power))
     }
 }
 
@@ -53,9 +65,14 @@ impl Provider for BatteryProvider {
 
         // Get battery info if available
         // Returns empty vars if no battery (common for desktops)
-        if let Some((percentage, status)) = self.get_battery_info() {
+        if let Some((percentage, status, power)) = self.get_battery_info() {
             vars.insert("battery_percentage".to_string(), format!("{}%", percentage));
             vars.insert("battery_status".to_string(), status);
+
+            // Add power draw if available
+            if let Some(power_str) = power {
+                vars.insert("battery_power".to_string(), power_str);
+            }
         }
 
         Ok(vars)
@@ -105,13 +122,21 @@ mod tests {
 
         // This test will only pass on systems with a battery
         // On desktops, it will return None which is expected
-        if let Some((percentage, status)) = provider.get_battery_info() {
+        if let Some((percentage, status, power)) = provider.get_battery_info() {
             // Check percentage is in valid range
             assert!(percentage <= 100);
 
             // Check status is one of the known states
             let valid_states = vec!["Charging", "Discharging", "Full", "Empty", "Unknown"];
             assert!(valid_states.contains(&status.as_str()));
+
+            // If power is present, check format
+            if let Some(power_str) = power {
+                // Should contain 'W' for watts
+                assert!(power_str.contains('W'));
+                // Should start with + or -
+                assert!(power_str.starts_with('+') || power_str.starts_with('-'));
+            }
         }
     }
 }

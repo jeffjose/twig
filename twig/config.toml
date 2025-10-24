@@ -54,6 +54,7 @@
 # Battery Variables (all variables share 'battery' prefix for auto-detection):
 # - {battery_percentage} - Battery percentage (e.g., "85%")
 # - {battery_status} - Battery status ("Charging", "Discharging", "Full", "Empty")
+# - {battery_power} - Power draw in watts (e.g., "+45.2W" charging, "-12.5W" discharging)
 # Note: Returns empty on desktops without batteries
 #
 # Uncomment to enable:
