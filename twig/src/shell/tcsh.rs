@@ -23,6 +23,13 @@ impl ShellFormatter for TcshFormatter {
         // In tcsh, "!" triggers history expansion, so we escape it to "\!"
         let output = output.replace('!', "\\!");
 
+        // Escape % for TCSH prompt formatting
+        // In tcsh, "%" is special (e.g., %n for username, %/ for path)
+        // We need to escape literal "%" to "%%" but preserve our formatting %{ and %}
+        let output = output.replace('%', "%%");
+        let output = output.replace("%%{", "%{");
+        let output = output.replace("%%}", "%}");
+
         // Fix edge case: when %} is immediately followed by \n, tcsh doesn't parse
         // the newline correctly. Insert a space between them.
         // The space is invisible at the end of the line but allows tcsh to parse the \n.
@@ -69,6 +76,21 @@ mod tests {
         // Test with formatted prompt
         let input = "%{\x1b[37m\x1b[1m%}!%{\x1b[0m%} ";
         let expected = "%{\x1b[37m\x1b[1m%}\\!%{\x1b[0m%} ";
+        assert_eq!(formatter.finalize(input), expected);
+    }
+
+    #[test]
+    fn test_tcsh_finalize_percent_escaping() {
+        let formatter = TcshFormatter;
+        // Test that % is escaped to %% for tcsh prompt formatting
+        // but %{ and %} are preserved for ANSI wrapping
+        let input = "%{\x1b[33m%}85%%{\x1b[0m%}";
+        let expected = "%{\x1b[33m%}85%%%{\x1b[0m%}";
+        assert_eq!(formatter.finalize(input), expected);
+
+        // Test multiple percent signs
+        let input = "100% complete";
+        let expected = "100%% complete";
         assert_eq!(formatter.finalize(input), expected);
     }
 }

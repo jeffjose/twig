@@ -38,9 +38,16 @@ impl BatteryProvider {
         // Get power draw (watts)
         let power = {
             let rate = battery.energy_rate();
-            let watts = rate.get::<battery::units::power::watt>();
+            let mut watts = rate.get::<battery::units::power::watt>();
+
+            // The battery crate returns positive values for both charging and discharging.
+            // We need to negate the value when discharging to show power consumption as negative.
+            if battery.state() == State::Discharging {
+                watts = -watts;
+            }
+
             if watts.abs() > 0.1 {
-                // Format with sign: +45W (charging) or -15W (discharging)
+                // Format with sign: +45.2W (charging) or -11.7W (discharging)
                 Some(format!("{:+.1}W", watts))
             } else {
                 None
