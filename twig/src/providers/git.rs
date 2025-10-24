@@ -4,25 +4,8 @@ use super::{Provider, ProviderError, ProviderResult};
 use crate::config::Config;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::env;
-use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Mutex;
 use std::time::SystemTime;
-
-/// Cached git information with filesystem-based invalidation
-#[derive(Debug, Clone)]
-struct GitCache {
-    cwd: PathBuf,
-    index_mtime: Option<SystemTime>,
-    head_mtime: Option<SystemTime>,
-    fetch_head_mtime: Option<SystemTime>,
-    variables: HashMap<String, String>,
-}
-
-/// Global cache shared across provider instances
-static GIT_CACHE: Mutex<Option<GitCache>> = Mutex::new(None);
 
 pub struct GitProvider;
 
@@ -40,59 +23,13 @@ impl GitProvider {
             .unwrap_or(false)
     }
 
-    /// Get .git directory path
-    fn get_git_dir(&self) -> Option<PathBuf> {
-        let output = Command::new("git")
+    /// Check if in a git repository
+    fn is_git_repo(&self) -> bool {
+        Command::new("git")
             .args(["rev-parse", "--git-dir"])
             .output()
-            .ok()?;
-
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            Some(PathBuf::from(path))
-        } else {
-            None
-        }
-    }
-
-    /// Get modification times of git state files for cache invalidation
-    /// Returns (index_mtime, head_mtime, fetch_head_mtime)
-    fn get_git_mtimes(&self, git_dir: &PathBuf) -> (Option<SystemTime>, Option<SystemTime>, Option<SystemTime>) {
-        let index_mtime = fs::metadata(git_dir.join("index"))
-            .and_then(|m| m.modified())
-            .ok();
-
-        let head_mtime = fs::metadata(git_dir.join("HEAD"))
-            .and_then(|m| m.modified())
-            .ok();
-
-        let fetch_head_mtime = fs::metadata(git_dir.join("FETCH_HEAD"))
-            .and_then(|m| m.modified())
-            .ok();
-
-        (index_mtime, head_mtime, fetch_head_mtime)
-    }
-
-    /// Check if cache is valid for current directory and git state
-    fn is_cache_valid(&self, git_dir: &PathBuf) -> bool {
-        if let Ok(cache) = GIT_CACHE.lock() {
-            if let Some(ref cached) = *cache {
-                // Check if CWD changed
-                let current_cwd = env::current_dir().ok();
-                if current_cwd.as_ref() != Some(&cached.cwd) {
-                    return false;
-                }
-
-                // Check if any git state files changed
-                let (index_mtime, head_mtime, fetch_head_mtime) = self.get_git_mtimes(git_dir);
-
-                // Cache is valid ONLY if ALL mtimes match
-                return cached.index_mtime == index_mtime
-                    && cached.head_mtime == head_mtime
-                    && cached.fetch_head_mtime == fetch_head_mtime;
-            }
-        }
-        false
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 
     /// Batch query git status - gets branch, upstream, ahead/behind, and file status in ONE command
@@ -209,23 +146,12 @@ impl Provider for GitProvider {
             };
         }
 
-        // Get git directory (also checks if in repo)
-        let git_dir = match self.get_git_dir() {
-            Some(dir) => dir,
-            None => return Ok(vars), // Not in a git repo
-        };
-
-        // Check cache validity (cheap - just file stats)
-        if self.is_cache_valid(&git_dir) {
-            // Cache is valid! Return cached variables
-            if let Ok(cache) = GIT_CACHE.lock() {
-                if let Some(ref cached) = *cache {
-                    return Ok(cached.variables.clone());
-                }
-            }
+        // Check if in a git repo
+        if !self.is_git_repo() {
+            return Ok(vars);
         }
 
-        // Cache miss or invalid - query git (expensive)
+        // Query git using batched command (gets everything in one call)
         let (branch, _upstream, ahead, behind, staged, unstaged) =
             match self.get_git_status_batch() {
                 Some(result) => result,
@@ -263,20 +189,6 @@ impl Provider for GitProvider {
         // Elapsed time
         if let Some(elapsed) = self.get_elapsed_time() {
             vars.insert("git_elapsed".to_string(), format!(":{}", elapsed));
-        }
-
-        // Update cache with new results
-        let current_cwd = env::current_dir().ok().unwrap_or_else(|| PathBuf::from("."));
-        let (index_mtime, head_mtime, fetch_head_mtime) = self.get_git_mtimes(&git_dir);
-
-        if let Ok(mut cache) = GIT_CACHE.lock() {
-            *cache = Some(GitCache {
-                cwd: current_cwd,
-                index_mtime,
-                head_mtime,
-                fetch_head_mtime,
-                variables: vars.clone(),
-            });
         }
 
         Ok(vars)
