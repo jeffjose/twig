@@ -73,10 +73,15 @@ fn main() {
 
     // Collect variables only from needed providers (performance optimization)
     let render_start = Instant::now();
-    let (variables, provider_timings) = match registry.collect_from(&needed_providers, &config, false) {
+    let (mut variables, provider_timings) = match registry.collect_from(&needed_providers, &config, false) {
         Ok(result) => (result.variables, result.timings),
         Err(_) => (HashMap::new(), Vec::new()), // Should not happen - providers catch errors in non-validate mode
     };
+
+    // Add terminal width as a special variable for debugging/display
+    if let Some(width) = terminal_width {
+        variables.insert("terminal_width".to_string(), width.to_string());
+    }
 
     // Determine shell mode and output format
     let (shell_mode, show_box) = if let Some(mode) = &cli.mode {
