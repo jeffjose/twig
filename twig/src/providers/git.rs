@@ -4,8 +4,25 @@ use super::{Provider, ProviderError, ProviderResult};
 use crate::config::Config;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::SystemTime;
+
+/// Cached git information with filesystem-based invalidation
+#[derive(Debug, Clone)]
+struct GitCache {
+    cwd: PathBuf,
+    index_mtime: Option<SystemTime>,
+    head_mtime: Option<SystemTime>,
+    fetch_head_mtime: Option<SystemTime>,
+    variables: HashMap<String, String>,
+}
+
+/// Global cache shared across provider instances
+static GIT_CACHE: Mutex<Option<GitCache>> = Mutex::new(None);
 
 pub struct GitProvider;
 
@@ -23,100 +40,110 @@ impl GitProvider {
             .unwrap_or(false)
     }
 
-    /// Check if current directory is in a git repo
-    fn is_git_repo(&self) -> bool {
-        Command::new("git")
-            .args(["rev-parse", "--git-dir"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
-    /// Get current branch name
-    fn get_branch(&self) -> Option<String> {
+    /// Get .git directory path
+    fn get_git_dir(&self) -> Option<PathBuf> {
         let output = Command::new("git")
-            .args(["branch", "--show-current"])
+            .args(["rev-parse", "--git-dir"])
             .output()
             .ok()?;
 
         if output.status.success() {
-            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if branch.is_empty() {
-                None // Detached HEAD state
-            } else {
-                Some(branch)
-            }
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            Some(PathBuf::from(path))
         } else {
             None
         }
     }
 
-    /// Get commits ahead/behind remote
-    fn get_ahead_behind(&self) -> Option<(u32, u32)> {
+    /// Get modification times of git state files for cache invalidation
+    /// Returns (index_mtime, head_mtime, fetch_head_mtime)
+    fn get_git_mtimes(&self, git_dir: &PathBuf) -> (Option<SystemTime>, Option<SystemTime>, Option<SystemTime>) {
+        let index_mtime = fs::metadata(git_dir.join("index"))
+            .and_then(|m| m.modified())
+            .ok();
+
+        let head_mtime = fs::metadata(git_dir.join("HEAD"))
+            .and_then(|m| m.modified())
+            .ok();
+
+        let fetch_head_mtime = fs::metadata(git_dir.join("FETCH_HEAD"))
+            .and_then(|m| m.modified())
+            .ok();
+
+        (index_mtime, head_mtime, fetch_head_mtime)
+    }
+
+    /// Check if cache is valid for current directory and git state
+    fn is_cache_valid(&self, git_dir: &PathBuf) -> bool {
+        if let Ok(cache) = GIT_CACHE.lock() {
+            if let Some(ref cached) = *cache {
+                // Check if CWD changed
+                let current_cwd = env::current_dir().ok();
+                if current_cwd.as_ref() != Some(&cached.cwd) {
+                    return false;
+                }
+
+                // Check if any git state files changed
+                let (index_mtime, head_mtime, fetch_head_mtime) = self.get_git_mtimes(git_dir);
+
+                // Cache is valid ONLY if ALL mtimes match
+                return cached.index_mtime == index_mtime
+                    && cached.head_mtime == head_mtime
+                    && cached.fetch_head_mtime == fetch_head_mtime;
+            }
+        }
+        false
+    }
+
+    /// Batch query git status - gets branch, upstream, ahead/behind, and file status in ONE command
+    /// Returns (branch, upstream, ahead, behind, staged_count, unstaged_count)
+    fn get_git_status_batch(&self) -> Option<(String, Option<String>, u32, u32, usize, usize)> {
         let output = Command::new("git")
-            .args(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
+            .args(["status", "--porcelain=v2", "--branch"])
             .output()
             .ok()?;
 
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            let parts: Vec<&str> = text.split_whitespace().collect();
-            if parts.len() == 2 {
-                let ahead = parts[0].parse().ok()?;
-                let behind = parts[1].parse().ok()?;
-                return Some((ahead, behind));
-            }
+        if !output.status.success() {
+            return None;
         }
-        None
-    }
 
-    /// Get working tree status (staged, modified, and untracked file counts)
-    /// Returns (staged_count, unstaged_count)
-    /// unstaged_count includes both modified and untracked files
-    fn get_status(&self) -> (usize, usize) {
-        let output = Command::new("git")
-            .args(["status", "--porcelain"])
-            .output();
+        let text = String::from_utf8_lossy(&output.stdout);
 
-        if let Ok(output) = output {
-            if output.status.success() {
-                let text = String::from_utf8_lossy(&output.stdout);
-                let mut staged = 0;
-                let mut unstaged = 0;
+        let mut branch = String::from("HEAD"); // Default for detached HEAD
+        let mut upstream: Option<String> = None;
+        let mut ahead: u32 = 0;
+        let mut behind: u32 = 0;
+        let mut staged: usize = 0;
+        let mut unstaged: usize = 0;
 
-                for line in text.lines() {
-                    if line.is_empty() {
-                        continue;
-                    }
-
-                    // Git status --porcelain format:
-                    // XY filename
-                    // X = index status, Y = working tree status
-                    let chars: Vec<char> = line.chars().collect();
-                    if chars.len() < 2 {
-                        continue;
-                    }
-
-                    let x = chars[0];
-                    let y = chars[1];
-
-                    // Staged files: anything in the index (X is not space, ?, or !)
-                    if x != ' ' && x != '?' && x != '!' {
-                        staged += 1;
-                    }
-
-                    // Unstaged files: modified or untracked (Y is not space)
-                    // This includes: modified (M), deleted (D), untracked (?), etc.
-                    if y != ' ' {
-                        unstaged += 1;
-                    }
+        for line in text.lines() {
+            if line.starts_with("# branch.head ") {
+                // Branch name
+                branch = line.strip_prefix("# branch.head ")?.to_string();
+            } else if line.starts_with("# branch.upstream ") {
+                // Upstream branch
+                upstream = Some(line.strip_prefix("# branch.upstream ")?.to_string());
+            } else if line.starts_with("# branch.ab ") {
+                // Ahead/behind: "# branch.ab +2 -1" means ahead 2, behind 1
+                let ab = line.strip_prefix("# branch.ab ")?;
+                let parts: Vec<&str> = ab.split_whitespace().collect();
+                if parts.len() == 2 {
+                    ahead = parts[0].trim_start_matches('+').parse().ok()?;
+                    behind = parts[1].trim_start_matches('-').parse().ok()?;
                 }
-
-                return (staged, unstaged);
+            } else if line.starts_with("1 ") || line.starts_with("2 ") {
+                // Staged files (ordinary changed entries or rename/copy entries)
+                staged += 1;
+            } else if line.starts_with("? ") {
+                // Untracked files
+                unstaged += 1;
+            } else if line.starts_with("u ") {
+                // Unmerged files (conflicts) - count as unstaged
+                unstaged += 1;
             }
         }
 
-        (0, 0)
+        Some((branch, upstream, ahead, behind, staged, unstaged))
     }
 
     /// Get elapsed time since last git state change
@@ -182,57 +209,74 @@ impl Provider for GitProvider {
             };
         }
 
-        // If not in a git repo, return empty (not an error)
-        if !self.is_git_repo() {
-            return Ok(vars);
-        }
-
-        // Get branch name
-        let branch = if let Some(branch) = self.get_branch() {
-            branch
-        } else {
-            "HEAD".to_string() // Detached HEAD
+        // Get git directory (also checks if in repo)
+        let git_dir = match self.get_git_dir() {
+            Some(dir) => dir,
+            None => return Ok(vars), // Not in a git repo
         };
 
-        // Variable: {git_branch} = branch name
-        vars.insert("git_branch".to_string(), branch);
-
-        // Get ahead/behind status
-        if let Some((ahead, behind)) = self.get_ahead_behind() {
-            let tracking = if behind > 0 {
-                format!("(behind.{})", behind)
-            } else if ahead > 0 {
-                format!("(ahead.{})", ahead)
-            } else {
-                String::new() // Up to date
-            };
-
-            if !tracking.is_empty() {
-                vars.insert("git_tracking".to_string(), tracking);
+        // Check cache validity (cheap - just file stats)
+        if self.is_cache_valid(&git_dir) {
+            // Cache is valid! Return cached variables
+            if let Ok(cache) = GIT_CACHE.lock() {
+                if let Some(ref cached) = *cache {
+                    return Ok(cached.variables.clone());
+                }
             }
         }
 
-        // Get working tree status
-        let (staged, unstaged) = self.get_status();
+        // Cache miss or invalid - query git (expensive)
+        let (branch, _upstream, ahead, behind, staged, unstaged) =
+            match self.get_git_status_batch() {
+                Some(result) => result,
+                None => return Ok(vars), // Failed to get status
+            };
 
-        // Separate status indicators by type for different colors
+        // Build variables from batched result
+        vars.insert("git_branch".to_string(), branch);
+
+        // Tracking status
+        let tracking = if behind > 0 {
+            format!("(behind.{})", behind)
+        } else if ahead > 0 {
+            format!("(ahead.{})", ahead)
+        } else {
+            String::new()
+        };
+
+        if !tracking.is_empty() {
+            vars.insert("git_tracking".to_string(), tracking);
+        }
+
+        // File status
         if staged == 0 && unstaged == 0 {
-            // Clean status (green)
             vars.insert("git_status_clean".to_string(), ":✔".to_string());
         } else {
-            // Staged files (yellow)
             if staged > 0 {
                 vars.insert("git_status_staged".to_string(), format!(":+{}", staged));
             }
-            // Unstaged files: modified or untracked (red)
             if unstaged > 0 {
                 vars.insert("git_status_unstaged".to_string(), format!(":+{}", unstaged));
             }
         }
 
-        // Get elapsed time
+        // Elapsed time
         if let Some(elapsed) = self.get_elapsed_time() {
             vars.insert("git_elapsed".to_string(), format!(":{}", elapsed));
+        }
+
+        // Update cache with new results
+        let current_cwd = env::current_dir().ok().unwrap_or_else(|| PathBuf::from("."));
+        let (index_mtime, head_mtime, fetch_head_mtime) = self.get_git_mtimes(&git_dir);
+
+        if let Ok(mut cache) = GIT_CACHE.lock() {
+            *cache = Some(GitCache {
+                cwd: current_cwd,
+                index_mtime,
+                head_mtime,
+                fetch_head_mtime,
+                variables: vars.clone(),
+            });
         }
 
         Ok(vars)
