@@ -61,5 +61,5 @@
 # [battery]
 
 [prompt]
-format = '''--({time:cyan} {hostname:yellow} {ip_address:yellow} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:dim})--
-{"!":white,bold} '''
+format = '''--({time:cyan} {hostname:yellow} {ip_address:yellow}~{battery_percentage:yellow}~{battery_power:cyan} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:dim})--
+{"$":white,bold} '''
