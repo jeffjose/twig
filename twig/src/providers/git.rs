@@ -26,7 +26,7 @@ impl GitProvider {
     /// Check if current directory is in a git repo
     fn is_git_repo(&self) -> bool {
         Command::new("git")
-            .args(&["rev-parse", "--git-dir"])
+            .args(["rev-parse", "--git-dir"])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
@@ -35,7 +35,7 @@ impl GitProvider {
     /// Get current branch name
     fn get_branch(&self) -> Option<String> {
         let output = Command::new("git")
-            .args(&["branch", "--show-current"])
+            .args(["branch", "--show-current"])
             .output()
             .ok()?;
 
@@ -54,13 +54,13 @@ impl GitProvider {
     /// Get commits ahead/behind remote
     fn get_ahead_behind(&self) -> Option<(u32, u32)> {
         let output = Command::new("git")
-            .args(&["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
+            .args(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
             .output()
             .ok()?;
 
         if output.status.success() {
             let text = String::from_utf8_lossy(&output.stdout);
-            let parts: Vec<&str> = text.trim().split_whitespace().collect();
+            let parts: Vec<&str> = text.split_whitespace().collect();
             if parts.len() == 2 {
                 let ahead = parts[0].parse().ok()?;
                 let behind = parts[1].parse().ok()?;
@@ -75,7 +75,7 @@ impl GitProvider {
     /// unstaged_count includes both modified and untracked files
     fn get_status(&self) -> (usize, usize) {
         let output = Command::new("git")
-            .args(&["status", "--porcelain"])
+            .args(["status", "--porcelain"])
             .output();
 
         if let Ok(output) = output {
@@ -124,7 +124,7 @@ impl GitProvider {
     fn get_elapsed_time(&self) -> Option<String> {
         // Get timestamp of last commit
         let output = Command::new("git")
-            .args(&["log", "-1", "--format=%ct"])
+            .args(["log", "-1", "--format=%ct"])
             .output()
             .ok()?;
 
