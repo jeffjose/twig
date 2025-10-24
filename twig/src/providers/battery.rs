@@ -1,0 +1,126 @@
+// twig/src/providers/battery.rs
+
+use super::{Provider, ProviderError, ProviderResult};
+use crate::config::Config;
+use battery::{Manager, State};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+
+pub struct BatteryProvider;
+
+impl BatteryProvider {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Get battery information
+    /// Returns (percentage, status) where status is "Charging", "Discharging", "Full", etc.
+    fn get_battery_info(&self) -> Option<(u8, String)> {
+        // Create battery manager
+        let manager = Manager::new().ok()?;
+
+        // Get first battery (most systems have only one)
+        let mut batteries = manager.batteries().ok()?;
+        let battery = batteries.next()?.ok()?;
+
+        // Get state of charge (percentage)
+        let percentage = (battery.state_of_charge().value * 100.0) as u8;
+
+        // Get battery state
+        let status = match battery.state() {
+            State::Charging => "Charging",
+            State::Discharging => "Discharging",
+            State::Full => "Full",
+            State::Empty => "Empty",
+            _ => "Unknown",
+        };
+
+        Some((percentage, status.to_string()))
+    }
+}
+
+impl Provider for BatteryProvider {
+    fn name(&self) -> &str {
+        "battery"
+    }
+
+    fn sections(&self) -> Vec<&str> {
+        vec!["battery"]
+    }
+
+    fn collect(&self, _config: &Config, validate: bool) -> ProviderResult<HashMap<String, String>> {
+        let mut vars = HashMap::new();
+
+        match self.get_battery_info() {
+            Some((percentage, status)) => {
+                vars.insert("battery_percentage".to_string(), format!("{}%", percentage));
+                vars.insert("battery_status".to_string(), status);
+            }
+            None => {
+                // No battery found (desktop, or error)
+                if validate {
+                    return Err(ProviderError::ResourceNotAvailable(
+                        "No battery found".to_string(),
+                    ));
+                }
+                // Silent failure in non-validate mode (common for desktops)
+            }
+        }
+
+        Ok(vars)
+    }
+
+    fn default_config(&self) -> HashMap<String, Value> {
+        let mut defaults = HashMap::new();
+        defaults.insert("battery".to_string(), json!({}));
+        defaults
+    }
+
+    fn cacheable(&self) -> bool {
+        // Battery status changes slowly, can be cached
+        true
+    }
+
+    fn cache_duration(&self) -> u64 {
+        // Cache for 30 seconds (battery doesn't change that quickly)
+        30
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_battery_provider_creation() {
+        let provider = BatteryProvider::new();
+        assert_eq!(provider.name(), "battery");
+        assert_eq!(provider.sections(), vec!["battery"]);
+        assert!(provider.cacheable());
+        assert_eq!(provider.cache_duration(), 30);
+    }
+
+    #[test]
+    fn test_default_config() {
+        let provider = BatteryProvider::new();
+        let defaults = provider.default_config();
+
+        assert!(defaults.contains_key("battery"));
+    }
+
+    #[test]
+    fn test_battery_info_format() {
+        let provider = BatteryProvider::new();
+
+        // This test will only pass on systems with a battery
+        // On desktops, it will return None which is expected
+        if let Some((percentage, status)) = provider.get_battery_info() {
+            // Check percentage is in valid range
+            assert!(percentage <= 100);
+
+            // Check status is one of the known states
+            let valid_states = vec!["Charging", "Discharging", "Full", "Empty", "Unknown"];
+            assert!(valid_states.contains(&status.as_str()));
+        }
+    }
+}

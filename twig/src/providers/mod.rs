@@ -1,5 +1,6 @@
 // twig/src/providers/mod.rs
 
+pub mod battery;
 pub mod builtin;
 pub mod git;
 pub mod ip;
@@ -150,9 +151,7 @@ impl ProviderRegistry {
         registry.register(Box::new(builtin::BuiltinProvider::new()));
         registry.register(Box::new(git::GitProvider::new()));
         registry.register(Box::new(ip::IpProvider::new()));
-
-        // Future providers (stubs for now):
-        // registry.register(Box::new(BatteryProvider::new()));
+        registry.register(Box::new(battery::BatteryProvider::new()));
 
         registry
     }

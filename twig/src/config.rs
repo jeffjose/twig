@@ -12,6 +12,8 @@ pub struct Config {
     pub git: Option<GitConfig>,
     #[serde(default)]
     pub ip: Option<IpConfig>,
+    #[serde(default)]
+    pub battery: Option<BatteryConfig>,
     pub prompt: PromptConfig,
 }
 
@@ -53,6 +55,12 @@ pub struct IpConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct BatteryConfig {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PromptConfig {
     pub format: String,
 }
@@ -69,6 +77,7 @@ impl Config {
             "cwd" => self.cwd.is_some(),
             "git" => self.git.is_some(),
             "ip" => self.ip.is_some(),
+            "battery" => self.battery.is_some(),
             _ => false,
         }
     }
@@ -86,6 +95,9 @@ impl Config {
                 name: None,
                 interface: None,
                 prefer_ipv6: false,
+            }),
+            "battery" => self.battery = Some(BatteryConfig {
+                name: None,
             }),
             _ => {}
         }
