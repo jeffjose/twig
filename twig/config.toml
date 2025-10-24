@@ -32,12 +32,12 @@
 # name = "dir"  # use {dir} instead of {cwd}
 
 # Git Variables (all variables share 'git' prefix for auto-detection):
-# - {git_branch} - current branch name (e.g., "main", "dev")
-# - {git_tracking} - ahead/behind status (e.g., "(ahead.2)", "(behind.3)")
-# - {git_status} - working tree status (":✔" clean, ":+N" for changes)
-#   Note: git_status has built-in colors (green for clean, yellow for dirty)
-# - {git_elapsed} - time since last commit (e.g., ":2s", ":5m", ":17h")
+# - {git_branch} - current branch name (e.g., "main", "dev") [yellow]
+# - {git_tracking} - ahead/behind status (e.g., "(ahead.2)", "(behind.3)") [magenta]
+# - {git_status} - working tree status (":✔" clean, ":+N" for changes) [green/yellow]
+# - {git_elapsed} - time since last commit (e.g., ":2s", ":5m", ":17h") [dim]
+# Note: All git variables have built-in colors, no need to specify in template
 
 [prompt]
-format = '''--({time:cyan} {hostname:yellow} {cwd:green}~{git_branch:yellow}{git_tracking:magenta}{git_status}{git_elapsed:dim})--
+format = '''--({time:cyan} {hostname:yellow} {cwd:green}~{git_branch}{git_tracking}{git_status}{git_elapsed})--
 {"$":white,bold} '''

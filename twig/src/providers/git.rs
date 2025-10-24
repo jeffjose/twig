@@ -184,22 +184,22 @@ impl Provider for GitProvider {
             return Ok(vars);
         }
 
-        // Get branch name
+        // Get branch name with yellow color
         let branch = if let Some(branch) = self.get_branch() {
             branch
         } else {
             "HEAD".to_string() // Detached HEAD
         };
 
-        // Variable: {git_branch} = branch name
-        vars.insert("git_branch".to_string(), branch);
+        // Variable: {git_branch} = branch name (yellow)
+        vars.insert("git_branch".to_string(), format!("\x1b[33m{}\x1b[0m", branch));
 
-        // Get ahead/behind status
+        // Get ahead/behind status with magenta color
         if let Some((ahead, behind)) = self.get_ahead_behind() {
             let tracking = if behind > 0 {
-                format!("(behind.{})", behind)
+                format!("\x1b[35m(behind.{})\x1b[0m", behind)
             } else if ahead > 0 {
-                format!("(ahead.{})", ahead)
+                format!("\x1b[35m(ahead.{})\x1b[0m", ahead)
             } else {
                 String::new() // Up to date
             };
@@ -227,9 +227,9 @@ impl Provider for GitProvider {
 
         vars.insert("git_status".to_string(), status);
 
-        // Get elapsed time
+        // Get elapsed time with dim color
         if let Some(elapsed) = self.get_elapsed_time() {
-            vars.insert("git_elapsed".to_string(), format!(":{}", elapsed));
+            vars.insert("git_elapsed".to_string(), format!("\x1b[2m:{}\x1b[0m", elapsed));
         }
 
         Ok(vars)
