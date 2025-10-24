@@ -70,8 +70,9 @@ impl GitProvider {
         None
     }
 
-    /// Get working tree status (staged and untracked file counts)
-    /// Returns (staged_count, untracked_count)
+    /// Get working tree status (staged, modified, and untracked file counts)
+    /// Returns (staged_count, unstaged_count)
+    /// unstaged_count includes both modified and untracked files
     fn get_status(&self) -> (usize, usize) {
         let output = Command::new("git")
             .args(&["status", "--porcelain"])
@@ -81,7 +82,7 @@ impl GitProvider {
             if output.status.success() {
                 let text = String::from_utf8_lossy(&output.stdout);
                 let mut staged = 0;
-                let mut untracked = 0;
+                let mut unstaged = 0;
 
                 for line in text.lines() {
                     if line.is_empty() {
@@ -99,17 +100,19 @@ impl GitProvider {
                     let x = chars[0];
                     let y = chars[1];
 
-                    // Untracked files: "?? filename"
-                    if x == '?' && y == '?' {
-                        untracked += 1;
-                    }
                     // Staged files: anything in the index (X is not space, ?, or !)
-                    else if x != ' ' && x != '?' && x != '!' {
+                    if x != ' ' && x != '?' && x != '!' {
                         staged += 1;
+                    }
+
+                    // Unstaged files: modified or untracked (Y is not space)
+                    // This includes: modified (M), deleted (D), untracked (?), etc.
+                    if y != ' ' {
+                        unstaged += 1;
                     }
                 }
 
-                return (staged, untracked);
+                return (staged, unstaged);
             }
         }
 
@@ -184,22 +187,22 @@ impl Provider for GitProvider {
             return Ok(vars);
         }
 
-        // Get branch name with magenta color
+        // Get branch name
         let branch = if let Some(branch) = self.get_branch() {
             branch
         } else {
             "HEAD".to_string() // Detached HEAD
         };
 
-        // Variable: {git_branch} = branch name (magenta)
-        vars.insert("git_branch".to_string(), format!("\x1b[35m{}\x1b[0m", branch));
+        // Variable: {git_branch} = branch name
+        vars.insert("git_branch".to_string(), branch);
 
-        // Get ahead/behind status with magenta color
+        // Get ahead/behind status
         if let Some((ahead, behind)) = self.get_ahead_behind() {
             let tracking = if behind > 0 {
-                format!("\x1b[35m(behind.{})\x1b[0m", behind)
+                format!("(behind.{})", behind)
             } else if ahead > 0 {
-                format!("\x1b[35m(ahead.{})\x1b[0m", ahead)
+                format!("(ahead.{})", ahead)
             } else {
                 String::new() // Up to date
             };
@@ -209,27 +212,28 @@ impl Provider for GitProvider {
             }
         }
 
-        // Get working tree status with color coding
-        let (staged, untracked) = self.get_status();
-        let status = if staged == 0 && untracked == 0 {
-            // Clean status in green
-            "\x1b[32m:✔\x1b[0m".to_string()
-        } else if staged > 0 && untracked > 0 {
-            // Dirty status in yellow
-            format!("\x1b[33m:+{}+{}\x1b[0m", staged, untracked)
-        } else if staged > 0 {
-            // Staged files in yellow
-            format!("\x1b[33m:+{}\x1b[0m", staged)
+        // Get working tree status
+        let (staged, unstaged) = self.get_status();
+
+        // Separate clean vs dirty status into different variables
+        if staged == 0 && unstaged == 0 {
+            // Clean status
+            vars.insert("git_status_clean".to_string(), ":✔".to_string());
         } else {
-            // Untracked files in yellow
-            format!("\x1b[33m:+{}\x1b[0m", untracked)
-        };
+            // Dirty status
+            let status = if staged > 0 && unstaged > 0 {
+                format!(":+{}+{}", staged, unstaged)
+            } else if staged > 0 {
+                format!(":+{}", staged)
+            } else {
+                format!(":+{}", unstaged)
+            };
+            vars.insert("git_status_dirty".to_string(), status);
+        }
 
-        vars.insert("git_status".to_string(), status);
-
-        // Get elapsed time with dim color
+        // Get elapsed time
         if let Some(elapsed) = self.get_elapsed_time() {
-            vars.insert("git_elapsed".to_string(), format!("\x1b[2m:{}\x1b[0m", elapsed));
+            vars.insert("git_elapsed".to_string(), format!(":{}", elapsed));
         }
 
         Ok(vars)
