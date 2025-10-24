@@ -143,15 +143,15 @@ fn print_boxed(
     let lines: Vec<&str> = prompt.split('\n').collect();
     let text_lines: Vec<String> = lines.iter().map(|line| strip_ansi_codes(line)).collect();
 
-    // Find the maximum width across all lines
-    let max_width = text_lines.iter().map(|line| line.len()).max().unwrap_or(0).max(50);
+    // Find the maximum width across all lines (using character count, not byte length)
+    let max_width = text_lines.iter().map(|line| line.chars().count()).max().unwrap_or(0).max(50);
 
     // Top border
     println!("┌{}┐", "─".repeat(max_width + 2));
 
     // Print each line with proper padding
     for (i, line) in lines.iter().enumerate() {
-        let text_len = text_lines[i].len();
+        let text_len = text_lines[i].chars().count();
         let padding = " ".repeat(max_width - text_len);
         println!("│ {}{} │", line, padding);
     }
