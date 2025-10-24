@@ -66,6 +66,36 @@
 # Uncomment to enable:
 # [battery]
 
+# Responsive Prompts - Automatic prompt switching based on terminal width
+#
+# Twig detects your terminal width and selects the appropriate prompt format:
+# - format_wide: Used when terminal width >= width_threshold (default: 100)
+# - format_narrow: Used when terminal width < width_threshold
+# - format: Fallback/default format (always required)
+# - width_threshold: Column threshold for switching (default: 100)
+#
+# Use cases:
+# - Laptop: Narrow terminal → minimal prompt
+# - Desktop: Wide terminal → full-featured prompt
+# - tmux/split panes: Automatically adjusts to pane width
+#
+# Example responsive config:
+# [prompt]
+# # Wide terminal (>= 100 cols): Show everything
+# format_wide = "{time} {hostname} {ip_address} {battery_percentage} {cwd} {git_branch}{git_status_clean}"
+# # Narrow terminal (< 100 cols): Minimal
+# format_narrow = "{cwd} {git_branch}"
+# # Default/fallback
+# format = "{cwd}"
+# # Custom threshold (optional)
+# width_threshold = 100
+
 [prompt]
 format = '''--({time:cyan} {hostname:yellow} {ip_address:yellow}~{battery_percentage:yellow}~{battery_power_charging:green}~{battery_power_discharging:yellow} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:cyan})--
 {"!":white,bold} '''
+# Uncomment for responsive prompts:
+# format_wide = '''--({time:cyan} {hostname:yellow} {ip_address:yellow}~{battery_percentage:yellow}~{battery_power_charging:green}~{battery_power_discharging:yellow} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:cyan})--
+# {"!":white,bold} '''
+# format_narrow = '''{cwd:green}~{git_branch:magenta}{git_status_clean:green}{git_status_unstaged:red}
+# {"!":white,bold} '''
+# width_threshold = 100

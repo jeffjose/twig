@@ -19,3 +19,4 @@ directories = "5"
 clap = { version = "4", features = ["derive"] }
 get_if_addrs = "0.5"
 battery = "0.7"
+terminal_size = "0.3"

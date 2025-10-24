@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
+use terminal_size::{terminal_size, Width};
 
 #[derive(Parser)]
 #[command(name = "twig")]
@@ -47,8 +48,13 @@ fn main() {
     let config_start = Instant::now();
     let (mut config, config_path) = load_config(cli.config.as_deref());
 
+    // Detect terminal width for responsive prompt selection
+    let terminal_width = terminal_size().map(|(Width(w), _)| w);
+
+    // Get the appropriate prompt format based on terminal width
+    let format = config.prompt.get_format(terminal_width).to_string();
+
     // Apply implicit sections for variables used in template
-    let format = config.prompt.format.clone();
     apply_implicit_sections(&mut config, &format);
 
     let config_time = config_start.elapsed();
@@ -61,7 +67,7 @@ fn main() {
     }
 
     // Extract variables from template to determine which providers to run
-    let template_vars = extract_all_variables(&config.prompt.format);
+    let template_vars = extract_all_variables(&format);
     let template_var_refs: Vec<&str> = template_vars.iter().map(|s| s.as_str()).collect();
     let needed_providers = registry.determine_providers(&template_var_refs);
 
@@ -97,7 +103,7 @@ fn main() {
     let formatter = get_formatter(shell_mode);
 
     // Perform variable substitution with color support
-    let output = substitute_variables(&config.prompt.format, &variables, formatter.as_ref());
+    let output = substitute_variables(&format, &variables, formatter.as_ref());
 
     // Post-process output for shell-specific requirements (e.g., escape newlines for TCSH/Zsh)
     let output = formatter.finalize(&output);
@@ -298,7 +304,7 @@ fn validate_config(
 
     let ok = "\x1b[32m[OK]\x1b[0m";  // Green [OK]
 
-    // Validate format string syntax
+    // Validate all format strings (default, wide, narrow)
     let format = &config.prompt.format;
     match validate_format_syntax(format) {
         Ok(vars) => {
@@ -309,6 +315,32 @@ fn validate_config(
         Err(e) => {
             println!("❌ Format string: {}", e);
             success = false;
+        }
+    }
+
+    // Validate format_wide if configured
+    if let Some(ref format_wide) = config.prompt.format_wide {
+        match validate_format_syntax(format_wide) {
+            Ok(vars) => {
+                println!("{} Format wide valid ({} variables)", ok, vars.len());
+            }
+            Err(e) => {
+                println!("❌ Format wide: {}", e);
+                success = false;
+            }
+        }
+    }
+
+    // Validate format_narrow if configured
+    if let Some(ref format_narrow) = config.prompt.format_narrow {
+        match validate_format_syntax(format_narrow) {
+            Ok(vars) => {
+                println!("{} Format narrow valid ({} variables)", ok, vars.len());
+            }
+            Err(e) => {
+                println!("❌ Format narrow: {}", e);
+                success = false;
+            }
         }
     }
 
@@ -541,6 +573,9 @@ fn create_default_config() -> Config {
         battery: None,
         prompt: PromptConfig {
             format: "{time:cyan} {\"@\":yellow,bold} {hostname:magenta} {cwd:green} {\"$\":white,bold} ".to_string(),
+            format_wide: None,
+            format_narrow: None,
+            width_threshold: 100,
         },
     }
 }

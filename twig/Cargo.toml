@@ -16,3 +16,4 @@ directories.workspace = true
 clap.workspace = true
 get_if_addrs.workspace = true
 battery.workspace = true
+terminal_size.workspace = true
