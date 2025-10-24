@@ -291,8 +291,6 @@ fn validate_config(
     let mut success = true;
     let mut warnings = Vec::new();
 
-    println!("\n┌─── Configuration Validation ───┐\n");
-
     let ok = "\x1b[32m[OK]\x1b[0m";  // Green [OK]
 
     // Validate format string syntax
@@ -388,9 +386,9 @@ fn validate_config(
     // Final result
     println!();
     if success {
-        println!("✅ Configuration is valid!\n");
+        println!("Configuration is valid.");
     } else {
-        println!("❌ Configuration has errors\n");
+        println!("Configuration has errors.");
     }
 
     success
