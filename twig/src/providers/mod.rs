@@ -2,6 +2,7 @@
 
 pub mod builtin;
 pub mod git;
+pub mod ip;
 
 use crate::config::Config;
 use serde_json::Value;
@@ -148,6 +149,7 @@ impl ProviderRegistry {
         // Register built-in plugins
         registry.register(Box::new(builtin::BuiltinProvider::new()));
         registry.register(Box::new(git::GitProvider::new()));
+        registry.register(Box::new(ip::IpProvider::new()));
 
         // Future providers (stubs for now):
         // registry.register(Box::new(BatteryProvider::new()));

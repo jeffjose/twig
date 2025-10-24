@@ -17,3 +17,4 @@ serde_json = "1"
 toml = "0.8"
 directories = "5"
 clap = { version = "4", features = ["derive"] }
+get_if_addrs = "0.5"

@@ -10,6 +10,8 @@ pub struct Config {
     pub cwd: Option<CwdConfig>,
     #[serde(default)]
     pub git: Option<GitConfig>,
+    #[serde(default)]
+    pub ip: Option<IpConfig>,
     pub prompt: PromptConfig,
 }
 
@@ -41,6 +43,16 @@ pub struct GitConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct IpConfig {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub interface: Option<String>,
+    #[serde(default)]
+    pub prefer_ipv6: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PromptConfig {
     pub format: String,
 }
@@ -56,6 +68,7 @@ impl Config {
             "hostname" => self.hostname.is_some(),
             "cwd" => self.cwd.is_some(),
             "git" => self.git.is_some(),
+            "ip" => self.ip.is_some(),
             _ => false,
         }
     }
@@ -69,6 +82,11 @@ impl Config {
             "hostname" => self.hostname = Some(HostnameConfig { name: None }),
             "cwd" => self.cwd = Some(CwdConfig { name: None }),
             "git" => self.git = Some(GitConfig { name: None }),
+            "ip" => self.ip = Some(IpConfig {
+                name: None,
+                interface: None,
+                prefer_ipv6: false,
+            }),
             _ => {}
         }
     }

@@ -312,6 +312,7 @@ fn create_default_config() -> Config {
         hostname: Some(HostnameConfig { name: None }),
         cwd: Some(CwdConfig { name: None }),
         git: None,
+        ip: None,
         prompt: PromptConfig {
             format: "{time:cyan} {\"@\":yellow,bold} {hostname:magenta} {cwd:green} {\"$\":white,bold} ".to_string(),
         },
