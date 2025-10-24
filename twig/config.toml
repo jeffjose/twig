@@ -7,6 +7,7 @@
 #
 # Variable Types:
 # - Config variables: {time}, {hostname}, {cwd}
+# - Git variables: {git_branch}, {git_tracking}, {git_status}, {git_elapsed}
 # - Environment variables: {$USER}, {$HOME}, etc.
 # - Literal text: {"@":yellow}
 #
@@ -14,6 +15,9 @@
 # Colors: black, red, green, yellow, blue, magenta, cyan, white
 #         bright_black, bright_red, etc.
 # Styles: bold, italic, underline
+#
+# Conditional Spacing: Use ~ for spaces that only appear if the next variable exists
+# Example: {cwd}~{git_branch} - space only appears when in a git repo
 
 # Sections are created implicitly from template variables
 # Uncomment to customize behavior:
@@ -27,6 +31,13 @@
 # [cwd]
 # name = "dir"  # use {dir} instead of {cwd}
 
+# Git Variables (all variables share 'git' prefix for auto-detection):
+# - {git_branch} - current branch name (e.g., "main", "dev")
+# - {git_tracking} - ahead/behind status (e.g., "(ahead.2)", "(behind.3)")
+# - {git_status} - working tree status (":✔" clean, ":+N" for changes)
+#   Note: git_status has built-in colors (green for clean, yellow for dirty)
+# - {git_elapsed} - time since last commit (e.g., ":2s", ":5m", ":17h")
+
 [prompt]
-format = '''{time:cyan} {$USER:bright_green,bold}@{hostname:magenta} {cwd:green} {git:yellow}
+format = '''--({time:cyan} {hostname:yellow} {cwd:green}~{git_branch:yellow}{git_tracking:magenta}{git_status}{git_elapsed:dim})--
 {"$":white,bold} '''

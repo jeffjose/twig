@@ -5,6 +5,7 @@ use crate::config::Config;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Command;
+use std::time::SystemTime;
 
 pub struct GitProvider;
 
@@ -50,20 +51,7 @@ impl GitProvider {
         }
     }
 
-    /// Check if working directory is dirty (has uncommitted changes)
-    /// Future enhancement: will be used when show_dirty config is implemented
-    #[allow(dead_code)]
-    fn is_dirty(&self) -> bool {
-        Command::new("git")
-            .args(&["status", "--porcelain"])
-            .output()
-            .map(|o| !o.stdout.is_empty())
-            .unwrap_or(false)
-    }
-
     /// Get commits ahead/behind remote
-    /// Future enhancement: will be used when show_ahead_behind config is implemented
-    #[allow(dead_code)]
     fn get_ahead_behind(&self) -> Option<(u32, u32)> {
         let output = Command::new("git")
             .args(&["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
@@ -81,6 +69,91 @@ impl GitProvider {
         }
         None
     }
+
+    /// Get working tree status (staged and untracked file counts)
+    /// Returns (staged_count, untracked_count)
+    fn get_status(&self) -> (usize, usize) {
+        let output = Command::new("git")
+            .args(&["status", "--porcelain"])
+            .output();
+
+        if let Ok(output) = output {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                let mut staged = 0;
+                let mut untracked = 0;
+
+                for line in text.lines() {
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    // Git status --porcelain format:
+                    // XY filename
+                    // X = index status, Y = working tree status
+                    let chars: Vec<char> = line.chars().collect();
+                    if chars.len() < 2 {
+                        continue;
+                    }
+
+                    let x = chars[0];
+                    let y = chars[1];
+
+                    // Untracked files: "?? filename"
+                    if x == '?' && y == '?' {
+                        untracked += 1;
+                    }
+                    // Staged files: anything in the index (X is not space, ?, or !)
+                    else if x != ' ' && x != '?' && x != '!' {
+                        staged += 1;
+                    }
+                }
+
+                return (staged, untracked);
+            }
+        }
+
+        (0, 0)
+    }
+
+    /// Get elapsed time since last git state change
+    /// This checks the timestamp of the last commit
+    fn get_elapsed_time(&self) -> Option<String> {
+        // Get timestamp of last commit
+        let output = Command::new("git")
+            .args(&["log", "-1", "--format=%ct"])
+            .output()
+            .ok()?;
+
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let timestamp: u64 = text.trim().parse().ok()?;
+
+            // Get current time
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .ok()?
+                .as_secs();
+
+            let elapsed = now.saturating_sub(timestamp);
+
+            // Format as human-readable
+            return Some(Self::format_duration(elapsed));
+        }
+
+        None
+    }
+
+    /// Format duration in human-readable format (e.g., "2s", "5m", "17h")
+    fn format_duration(seconds: u64) -> String {
+        if seconds < 60 {
+            format!("{}s", seconds)
+        } else if seconds < 3600 {
+            format!("{}m", seconds / 60)
+        } else {
+            format!("{}h", seconds / 3600)
+        }
+    }
 }
 
 impl Provider for GitProvider {
@@ -92,7 +165,7 @@ impl Provider for GitProvider {
         vec!["git"]
     }
 
-    fn collect(&self, config: &Config, validate: bool) -> ProviderResult<HashMap<String, String>> {
+    fn collect(&self, _config: &Config, validate: bool) -> ProviderResult<HashMap<String, String>> {
         let mut vars = HashMap::new();
 
         // Check if git is available
@@ -112,41 +185,51 @@ impl Provider for GitProvider {
         }
 
         // Get branch name
-        if let Some(branch) = self.get_branch() {
-            // Determine the variable name to use
-            let var_name = config.git
-                .as_ref()
-                .and_then(|c| c.name.as_ref())
-                .map(|s| s.as_str())
-                .unwrap_or("git");
-
-            // Primary variable: {git} = branch name
-            vars.insert(var_name.to_string(), branch);
+        let branch = if let Some(branch) = self.get_branch() {
+            branch
         } else {
-            // Detached HEAD or error
-            let var_name = config.git
-                .as_ref()
-                .and_then(|c| c.name.as_ref())
-                .map(|s| s.as_str())
-                .unwrap_or("git");
-            vars.insert(var_name.to_string(), "HEAD".to_string());
+            "HEAD".to_string() // Detached HEAD
+        };
+
+        // Variable: {git_branch} = branch name
+        vars.insert("git_branch".to_string(), branch);
+
+        // Get ahead/behind status
+        if let Some((ahead, behind)) = self.get_ahead_behind() {
+            let tracking = if behind > 0 {
+                format!("(behind.{})", behind)
+            } else if ahead > 0 {
+                format!("(ahead.{})", ahead)
+            } else {
+                String::new() // Up to date
+            };
+
+            if !tracking.is_empty() {
+                vars.insert("git_tracking".to_string(), tracking);
+            }
         }
 
-        // Check config for advanced features (future depth)
-        if let Some(_git_config) = config.git.as_ref() {
-            // Future: Support for showing dirty status
-            // if git_config.show_dirty == Some(true) {
-            //     let dirty = self.is_dirty();
-            //     vars.insert("git_dirty".to_string(), dirty.to_string());
-            // }
+        // Get working tree status with color coding
+        let (staged, untracked) = self.get_status();
+        let status = if staged == 0 && untracked == 0 {
+            // Clean status in green
+            "\x1b[32m:✔\x1b[0m".to_string()
+        } else if staged > 0 && untracked > 0 {
+            // Dirty status in yellow
+            format!("\x1b[33m:+{}+{}\x1b[0m", staged, untracked)
+        } else if staged > 0 {
+            // Staged files in yellow
+            format!("\x1b[33m:+{}\x1b[0m", staged)
+        } else {
+            // Untracked files in yellow
+            format!("\x1b[33m:+{}\x1b[0m", untracked)
+        };
 
-            // Future: Support for ahead/behind counts
-            // if git_config.show_ahead_behind == Some(true) {
-            //     if let Some((ahead, behind)) = self.get_ahead_behind() {
-            //         vars.insert("git_ahead".to_string(), ahead.to_string());
-            //         vars.insert("git_behind".to_string(), behind.to_string());
-            //     }
-            // }
+        vars.insert("git_status".to_string(), status);
+
+        // Get elapsed time
+        if let Some(elapsed) = self.get_elapsed_time() {
+            vars.insert("git_elapsed".to_string(), format!(":{}", elapsed));
         }
 
         Ok(vars)
