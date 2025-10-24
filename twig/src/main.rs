@@ -60,9 +60,14 @@ fn main() {
         std::process::exit(if success { 0 } else { 1 });
     }
 
-    // Collect all variables from providers
+    // Extract variables from template to determine which providers to run
+    let template_vars = extract_all_variables(&config.prompt.format);
+    let template_var_refs: Vec<&str> = template_vars.iter().map(|s| s.as_str()).collect();
+    let needed_providers = registry.determine_providers(&template_var_refs);
+
+    // Collect variables only from needed providers (performance optimization)
     let render_start = Instant::now();
-    let (variables, provider_timings) = match registry.collect_all(&config, false) {
+    let (variables, provider_timings) = match registry.collect_from(&needed_providers, &config, false) {
         Ok(result) => (result.variables, result.timings),
         Err(_) => (HashMap::new(), Vec::new()), // Should not happen - providers catch errors in non-validate mode
     };
@@ -619,6 +624,47 @@ fn extract_next_variable(chars: &[char]) -> Option<String> {
     Some(var_name)
 }
 
+/// Extract all variables from a template string
+/// Returns a Vec of variable names (without colors/styles)
+/// Excludes literals and environment variables
+fn extract_all_variables(template: &str) -> Vec<String> {
+    let chars: Vec<char> = template.chars().collect();
+    let mut variables = Vec::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '{' {
+            // Find matching }
+            let mut end = i + 1;
+            while end < chars.len() && chars[end] != '}' {
+                end += 1;
+            }
+
+            if end < chars.len() {
+                let content: String = chars[i + 1..end].iter().collect();
+
+                // Skip literals ("text":color) and environment variables ($VAR)
+                if !content.starts_with('"') && !content.starts_with('$') {
+                    // Extract variable name (before any : for colors)
+                    if let Some(var_name) = content.split(':').next() {
+                        if !var_name.is_empty() {
+                            variables.push(var_name.to_string());
+                        }
+                    }
+                }
+
+                i = end + 1;
+            } else {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    variables
+}
+
 /// Check if a variable has a non-empty value
 /// Handles both regular variables and environment variables ($VAR)
 fn variable_has_value(var_name: &str, variables: &HashMap<String, String>) -> bool {
@@ -1153,5 +1199,65 @@ mod tests {
         // Verify the path and branch are present
         assert!(result.contains("/home/user"));
         assert!(result.contains("main"));
+    }
+
+    #[test]
+    fn test_extract_all_variables() {
+        // Test basic variable extraction
+        let template = "{cwd} {git_branch}";
+        let vars = extract_all_variables(template);
+        assert_eq!(vars, vec!["cwd", "git_branch"]);
+
+        // Test with colors
+        let template = "{cwd:green} {git_branch:magenta}";
+        let vars = extract_all_variables(template);
+        assert_eq!(vars, vec!["cwd", "git_branch"]);
+
+        // Test with literals (should be excluded)
+        let template = "{cwd} {\"!\": bold}";
+        let vars = extract_all_variables(template);
+        assert_eq!(vars, vec!["cwd"]);
+
+        // Test with environment variables (should be excluded)
+        let template = "{cwd} {$USER}";
+        let vars = extract_all_variables(template);
+        assert_eq!(vars, vec!["cwd"]);
+
+        // Test complex prompt
+        let template = "{time:cyan} {hostname:yellow} {cwd:green}~{git_branch:magenta}{git_status_clean:green}";
+        let vars = extract_all_variables(template);
+        assert_eq!(vars, vec!["time", "hostname", "cwd", "git_branch", "git_status_clean"]);
+    }
+
+    #[test]
+    fn test_selective_provider_execution() {
+        use crate::providers::ProviderRegistry;
+
+        let registry = ProviderRegistry::new();
+
+        // Test with only builtin variables
+        let vars = vec!["time", "hostname", "cwd"];
+        let providers = registry.determine_providers(&vars);
+        assert!(providers.contains(&"builtin"));
+        assert!(!providers.contains(&"git"));
+        assert!(!providers.contains(&"ip"));
+
+        // Test with git variables
+        let vars = vec!["git_branch", "git_status_clean"];
+        let providers = registry.determine_providers(&vars);
+        assert!(providers.contains(&"git"));
+        assert!(!providers.contains(&"builtin"));
+
+        // Test with mixed variables
+        let vars = vec!["cwd", "git_branch", "ip_address"];
+        let providers = registry.determine_providers(&vars);
+        assert!(providers.contains(&"builtin"));
+        assert!(providers.contains(&"git"));
+        assert!(providers.contains(&"ip"));
+
+        // Test with battery variables
+        let vars = vec!["battery_percentage", "battery_power"];
+        let providers = registry.determine_providers(&vars);
+        assert!(providers.contains(&"battery"));
     }
 }

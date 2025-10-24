@@ -234,28 +234,38 @@ impl ProviderRegistry {
     /// * `validate` - If true, providers return errors
     ///
     /// # Returns
-    /// Result with HashMap of variables from specified providers
-    /// Future: will be used for performance optimization
-    #[allow(dead_code)]
+    /// Result with CollectResult containing variables and timing data from specified providers
     pub fn collect_from(
         &self,
         provider_names: &[&str],
         config: &Config,
         validate: bool,
-    ) -> ProviderResult<HashMap<String, String>> {
+    ) -> ProviderResult<CollectResult> {
         let mut variables = HashMap::new();
+        let mut timings = Vec::new();
 
         for name in provider_names {
             if let Some(provider) = self.get(name) {
+                let start = Instant::now();
                 match provider.collect(config, validate) {
-                    Ok(vars) => variables.extend(vars),
+                    Ok(vars) => {
+                        let duration = start.elapsed();
+                        timings.push(ProviderTiming {
+                            name: provider.name().to_string(),
+                            duration,
+                        });
+                        variables.extend(vars);
+                    }
                     Err(e) if validate => return Err(e),
-                    Err(_) => {}
+                    Err(_) => {} // Silent failure in non-validate mode
                 }
             }
         }
 
-        Ok(variables)
+        // Sort timings by provider name for consistent output
+        timings.sort_by(|a, b| a.name.cmp(&b.name));
+
+        Ok(CollectResult { variables, timings })
     }
 
     /// Determine which providers are needed based on variables in template
@@ -267,8 +277,6 @@ impl ProviderRegistry {
     ///
     /// # Returns
     /// List of provider names needed
-    /// Future: will be used for performance optimization with collect_from
-    #[allow(dead_code)]
     pub fn determine_providers(&self, variables: &[&str]) -> Vec<&str> {
         let mut needed = std::collections::HashSet::new();
 
