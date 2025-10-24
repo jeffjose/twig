@@ -6,8 +6,10 @@
 # 3. Custom names: [cwd] with name="mydir" creates {mydir} variable instead
 #
 # Variable Types:
-# - Config variables: {time}, {hostname}, {cwd}
+# - Built-in variables: {time}, {hostname}, {cwd}, {terminal_width}
 # - Git variables: {git_branch}, {git_tracking}, {git_status}, {git_elapsed}
+# - IP variables: {ip_address}, {ip_interface}, {ip_version}
+# - Battery variables: {battery_percentage}, {battery_status}, {battery_power}
 # - Environment variables: {$USER}, {$HOME}, etc.
 # - Literal text: {"@":yellow}
 #
@@ -30,6 +32,12 @@
 #
 # [cwd]
 # name = "dir"  # use {dir} instead of {cwd}
+
+# Built-in Terminal Variables:
+# - {terminal_width} - Current terminal width in columns (e.g., "120", "80")
+#   Note: Shows "N/A" when not running in a real terminal (e.g., when piping)
+#   Useful for: Debugging responsive prompts, displaying terminal info
+#   Example: (width:{terminal_width:yellow})
 
 # Git Variables (all variables share 'git' prefix for auto-detection):
 # - {git_branch} - current branch name (e.g., "main", "dev")
@@ -91,11 +99,11 @@
 # width_threshold = 100
 
 [prompt]
-format = '''--({time:cyan} {hostname:yellow} {ip_address:yellow}~{battery_percentage:yellow}~{battery_power_charging:green}~{battery_power_discharging:yellow} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:cyan})--
+
 (width:{terminal_width:yellow}) {"!":white,bold} '''
-# Uncomment for responsive prompts:
-# format_wide = '''--({time:cyan} {hostname:yellow} {ip_address:yellow}~{battery_percentage:yellow}~{battery_power_charging:green}~{battery_power_discharging:yellow} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:cyan})--
-# (width:{terminal_width:yellow}) {"!":white,bold} '''
-# format_narrow = '''{cwd:green}~{git_branch:magenta}{git_status_clean:green}{git_status_unstaged:red}
-# (width:{terminal_width:yellow}) {"!":white,bold} '''
-# width_threshold = 100
+format_wide = '''--({time:cyan} {hostname:yellow} {ip_address:yellow}~{battery_percentage:yellow}~{battery_power_charging:green}~{battery_power_discharging:yellow} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:cyan})--
+(width:{terminal_width:yellow}) {"!":white,bold} '''
+format_narrow = '''{cwd:green}~{git_branch:magenta}{git_status_clean:green}{git_status_unstaged:red}
+(width:{terminal_width:yellow}) {"!":white,bold} '''
+#format = '''--({time:cyan} {hostname:yellow} {ip_address:yellow}~{battery_percentage:yellow}~{battery_power_charging:green}~{battery_power_discharging:yellow} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:cyan})--
+width_threshold = 100

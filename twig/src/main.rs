@@ -78,10 +78,12 @@ fn main() {
         Err(_) => (HashMap::new(), Vec::new()), // Should not happen - providers catch errors in non-validate mode
     };
 
-    // Add terminal width as a special variable for debugging/display
-    if let Some(width) = terminal_width {
-        variables.insert("terminal_width".to_string(), width.to_string());
-    }
+    // Add terminal width as a built-in variable
+    // This is always available, showing either the detected width or "N/A"
+    let width_str = terminal_width
+        .map(|w| w.to_string())
+        .unwrap_or_else(|| "N/A".to_string());
+    variables.insert("terminal_width".to_string(), width_str);
 
     // Determine shell mode and output format
     let (shell_mode, show_box) = if let Some(mode) = &cli.mode {
