@@ -1107,4 +1107,51 @@ mod tests {
         assert!(validate_time_format("Time: %H:%M:%S"));
         assert!(validate_time_format("%H%%")); // Double % is valid (literal %)
     }
+
+    #[test]
+    fn test_tcsh_exclamation_mark_escaping() {
+        use crate::shell::TcshFormatter;
+
+        let vars = make_vars(&[("cwd", "/home/user")]);
+        let formatter = TcshFormatter;
+
+        // Test that literal "!" gets escaped to "\!" in tcsh mode
+        let result = substitute_variables("{cwd} {\"!\":white,bold}", &vars, &formatter);
+        // Apply finalize() to get the final escaping
+        let result = formatter.finalize(&result);
+
+        // Should contain escaped exclamation mark
+        assert!(result.contains("\\!"), "Expected escaped \\! but got: {}", result);
+
+        // Should not contain unescaped "!"
+        // (Note: the literal is wrapped in ANSI codes, so we check for the pattern)
+        let unescaped_pattern = "%}!%{";
+        assert!(!result.contains(unescaped_pattern),
+                "Found unescaped ! in tcsh output: {}", result);
+    }
+
+    #[test]
+    fn test_tcsh_exclamation_in_prompt() {
+        use crate::shell::TcshFormatter;
+
+        let vars = make_vars(&[
+            ("cwd", "/home/user"),
+            ("git_branch", "main"),
+        ]);
+        let formatter = TcshFormatter;
+
+        // Test a realistic prompt with exclamation mark
+        let template = "{cwd}~{git_branch} {\"!\":bold} ";
+        let result = substitute_variables(template, &vars, &formatter);
+        // Apply finalize() to get the final escaping
+        let result = formatter.finalize(&result);
+
+        // Verify exclamation is escaped
+        assert!(result.contains("\\!"),
+                "Exclamation mark should be escaped in tcsh mode: {}", result);
+
+        // Verify the path and branch are present
+        assert!(result.contains("/home/user"));
+        assert!(result.contains("main"));
+    }
 }
