@@ -293,13 +293,15 @@ fn validate_config(
 
     println!("\n┌─── Configuration Validation ───┐\n");
 
+    let ok = "\x1b[32m[OK]\x1b[0m";  // Green [OK]
+
     // Validate format string syntax
     let format = &config.prompt.format;
     match validate_format_syntax(format) {
         Ok(vars) => {
-            println!("✓ Config file found ({})", config_path.display());
-            println!("✓ TOML syntax valid");
-            println!("✓ Format string valid ({} variables)", vars.len());
+            println!("{} Config file found ({})", ok, config_path.display());
+            println!("{} TOML syntax valid", ok);
+            println!("{} Format string valid ({} variables)", ok, vars.len());
         }
         Err(e) => {
             println!("❌ Format string: {}", e);
@@ -311,7 +313,7 @@ fn validate_config(
     match validate_colors_and_styles(format) {
         Ok(count) => {
             if count > 0 {
-                println!("✓ Colors and styles valid ({} found)", count);
+                println!("{} Colors and styles valid ({} found)", ok, count);
             }
         }
         Err(e) => {
@@ -323,7 +325,7 @@ fn validate_config(
     // Validate time format
     if let Some(time_config) = &config.time {
         if validate_time_format(&time_config.format) {
-            println!("✓ Time format valid");
+            println!("{} Time format valid", ok);
         } else {
             warnings.push(format!("Time format '{}' may contain invalid specifiers", time_config.format));
             println!("⚠  Time format may be invalid");
@@ -339,7 +341,7 @@ fn validate_config(
             let provider_names: Vec<String> = result.timings.iter()
                 .map(|t| t.name.clone())
                 .collect();
-            println!("✓ All providers available ({})", provider_names.join(", "));
+            println!("{} All providers available ({})", ok, provider_names.join(", "));
         }
         Err(e) => {
             println!("❌ Provider error: {:?}", e);
@@ -359,7 +361,7 @@ fn validate_config(
         if let Ok(result) = provider_result {
             let test_render = render_prompt(format, &result.variables);
             if !test_render.is_empty() {
-                println!("✓ Prompt renders successfully");
+                println!("{} Prompt renders successfully", ok);
 
                 // Check prompt length
                 let visual_length = test_render.chars().count();
@@ -368,7 +370,7 @@ fn validate_config(
                 }
 
                 // Shell compatibility
-                println!("✓ Shell compatibility verified (Raw, Tcsh, Bash, Zsh)");
+                println!("{} Shell compatibility verified (Raw, Tcsh, Bash, Zsh)", ok);
             } else {
                 warnings.push("Prompt rendering produced empty output".to_string());
             }
