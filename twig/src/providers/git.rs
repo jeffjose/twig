@@ -206,3 +206,27 @@ impl Provider for GitProvider {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_duration() {
+        assert_eq!(GitProvider::format_duration(5), "5s");
+        assert_eq!(GitProvider::format_duration(59), "59s");
+        assert_eq!(GitProvider::format_duration(60), "1m");
+        assert_eq!(GitProvider::format_duration(90), "1m");
+        assert_eq!(GitProvider::format_duration(3599), "59m");
+        assert_eq!(GitProvider::format_duration(3600), "1h");
+        assert_eq!(GitProvider::format_duration(7200), "2h");
+    }
+
+    #[test]
+    fn test_git_provider_creation() {
+        let provider = GitProvider::new();
+        assert_eq!(provider.name(), "git");
+        assert_eq!(provider.sections(), vec!["git"]);
+        assert!(!provider.cacheable());
+    }
+}
