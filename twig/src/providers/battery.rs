@@ -74,11 +74,20 @@ impl Provider for BatteryProvider {
         // Returns empty vars if no battery (common for desktops)
         if let Some((percentage, status, power)) = self.get_battery_info() {
             vars.insert("battery_percentage".to_string(), format!("{}%", percentage));
-            vars.insert("battery_status".to_string(), status);
+            vars.insert("battery_status".to_string(), status.clone());
 
             // Add power draw if available
+            // Split into charging/discharging variables for conditional coloring
             if let Some(power_str) = power {
-                vars.insert("battery_power".to_string(), power_str);
+                // Keep the generic one for backward compatibility
+                vars.insert("battery_power".to_string(), power_str.clone());
+
+                // Add state-specific variables for conditional coloring
+                if status == "Charging" {
+                    vars.insert("battery_power_charging".to_string(), power_str);
+                } else if status == "Discharging" {
+                    vars.insert("battery_power_discharging".to_string(), power_str);
+                }
             }
         }
 

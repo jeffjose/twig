@@ -55,11 +55,17 @@
 # - {battery_percentage} - Battery percentage (e.g., "85%")
 # - {battery_status} - Battery status ("Charging", "Discharging", "Full", "Empty")
 # - {battery_power} - Power draw in watts (e.g., "+45.2W" charging, "-12.5W" discharging)
+# - {battery_power_charging} - Power when charging (e.g., "+45.2W") - only set when charging
+# - {battery_power_discharging} - Power when discharging (e.g., "-12.5W") - only set when discharging
 # Note: Returns empty on desktops without batteries
+#
+# Tip: Use conditional spacing (~) with charging/discharging variables for automatic color:
+#   {battery_power_charging:green}~{battery_power_discharging:yellow}
+#   This shows green when charging, yellow when discharging!
 #
 # Uncomment to enable:
 # [battery]
 
 [prompt]
-format = '''--({time:cyan} {hostname:yellow} {ip_address:yellow}~{battery_percentage:yellow}~{battery_power:cyan} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:cyan})--
+format = '''--({time:cyan} {hostname:yellow} {ip_address:yellow}~{battery_percentage:yellow}~{battery_power_charging:green}~{battery_power_discharging:yellow} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:cyan})--
 {"!":white,bold} '''
