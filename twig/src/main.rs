@@ -260,18 +260,57 @@ fn strip_ansi_codes(s: &str) -> String {
 /// Load config from specified path or ~/.config/twig/config.toml
 /// Creates default config if it doesn't exist (only for default path)
 /// Returns (config, path_used)
+/// Create a minimal fallback config when parsing fails
+fn create_fallback_config() -> Config {
+    Config {
+        time: None,
+        hostname: None,
+        cwd: None,
+        git: None,
+        ip: None,
+        battery: None,
+        prompt: PromptConfig {
+            format: "[{$USER}@{$HOSTNAME}] ".to_string(),
+            format_wide: None,
+            format_narrow: None,
+            width_threshold: 100,
+        },
+    }
+}
+
 fn load_config(custom_path: Option<&std::path::Path>) -> (Config, PathBuf) {
     let config_path = custom_path
         .map(|p| p.to_path_buf())
         .unwrap_or_else(get_config_path);
 
-    // If config exists, load it
+    // If config exists, try to load it
     let config = if config_path.exists() {
-        let contents = fs::read_to_string(&config_path)
-            .expect("Failed to read config file");
-
-        toml::from_str(&contents)
-            .expect("Failed to parse config file")
+        match fs::read_to_string(&config_path) {
+            Ok(contents) => {
+                match toml::from_str::<Config>(&contents) {
+                    Ok(config) => config,
+                    Err(e) => {
+                        // Config parse error - show helpful message and use fallback
+                        eprintln!("\x1b[31mError:\x1b[0m Failed to parse config file: {}", config_path.display());
+                        eprintln!("       {}", e);
+                        eprintln!();
+                        eprintln!("\x1b[33mUsing fallback prompt:\x1b[0m [{{$USER}}@{{$HOSTNAME}}]");
+                        eprintln!("\x1b[33mFix your config file and restart.\x1b[0m");
+                        eprintln!();
+                        create_fallback_config()
+                    }
+                }
+            }
+            Err(e) => {
+                // File read error
+                eprintln!("\x1b[31mError:\x1b[0m Failed to read config file: {}", config_path.display());
+                eprintln!("       {}", e);
+                eprintln!();
+                eprintln!("\x1b[33mUsing fallback prompt:\x1b[0m [{{$USER}}@{{$HOSTNAME}}]");
+                eprintln!();
+                create_fallback_config()
+            }
+        }
     } else {
         // Only auto-create if using default path
         if custom_path.is_none() {
@@ -280,20 +319,22 @@ fn load_config(custom_path: Option<&std::path::Path>) -> (Config, PathBuf) {
 
             // Ensure parent directory exists
             if let Some(parent) = config_path.parent() {
-                fs::create_dir_all(parent)
-                    .expect("Failed to create config directory");
+                let _ = fs::create_dir_all(parent);
             }
 
-            // Write default config
-            let toml_string = toml::to_string_pretty(&default_config)
-                .expect("Failed to serialize config");
-
-            fs::write(&config_path, toml_string)
-                .expect("Failed to write config file");
+            // Write default config (ignore errors - we can still use the in-memory config)
+            if let Ok(toml_string) = toml::to_string_pretty(&default_config) {
+                let _ = fs::write(&config_path, toml_string);
+            }
 
             default_config
         } else {
-            panic!("Config file not found: {}", config_path.display());
+            // Custom config path not found
+            eprintln!("\x1b[31mError:\x1b[0m Config file not found: {}", config_path.display());
+            eprintln!();
+            eprintln!("\x1b[33mUsing fallback prompt:\x1b[0m [{{$USER}}@{{$HOSTNAME}}]");
+            eprintln!();
+            create_fallback_config()
         }
     };
 
