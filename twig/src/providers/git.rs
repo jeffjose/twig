@@ -215,20 +215,19 @@ impl Provider for GitProvider {
         // Get working tree status
         let (staged, unstaged) = self.get_status();
 
-        // Separate clean vs dirty status into different variables
+        // Separate status indicators by type for different colors
         if staged == 0 && unstaged == 0 {
-            // Clean status
+            // Clean status (green)
             vars.insert("git_status_clean".to_string(), ":✔".to_string());
         } else {
-            // Dirty status
-            let status = if staged > 0 && unstaged > 0 {
-                format!(":+{}+{}", staged, unstaged)
-            } else if staged > 0 {
-                format!(":+{}", staged)
-            } else {
-                format!(":+{}", unstaged)
-            };
-            vars.insert("git_status_dirty".to_string(), status);
+            // Staged files (yellow)
+            if staged > 0 {
+                vars.insert("git_status_staged".to_string(), format!(":+{}", staged));
+            }
+            // Unstaged files: modified or untracked (red)
+            if unstaged > 0 {
+                vars.insert("git_status_unstaged".to_string(), format!(":+{}", unstaged));
+            }
         }
 
         // Get elapsed time
