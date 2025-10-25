@@ -150,18 +150,21 @@
 
 ---
 
-## Phase 6: IP Address Provider
+## Phase 6: IP Address Provider ✅
 
 **Goal**: Add network information
 
 ### IP Address Module
-- [ ] Get IPv4 addresses
-- [ ] Get IPv6 addresses
-- [ ] Support specific interface selection (e.g., `eth0`, `wlan0`)
-- [ ] Handle missing/down interfaces gracefully
-- [ ] `[ip]` config section with optional `interface` field
+- [x] Get IPv4 addresses
+- [x] Get IPv6 addresses
+- [x] Support specific interface selection (e.g., `eth0`, `wlan0`)
+- [x] Handle missing/down interfaces gracefully
+- [x] `[ip]` config section with optional `interface` field
+- [x] Filter loopback and link-local addresses
+- [x] `prefer_ipv6` configuration option
+- [x] Variables: `ip_address`, `ip_interface`, `ip_version`
 
-**Deliverable**: Prompts can show IP address like `{ip:blue}`
+**Deliverable**: ✅ Prompts can show IP address like `{ip_address:blue}` with interface selection and IPv4/IPv6 support
 
 ---
 
@@ -205,17 +208,20 @@
 
 ---
 
-## Phase 8: Battery/Power Provider
+## Phase 8: Battery/Power Provider ✅
 
 **Goal**: Add battery information
 
 ### Basic Battery Info
-- [ ] Display battery percentage
-- [ ] Display charging status (Charging/Discharging/Full)
-- [ ] Gracefully handle systems without batteries
-- [ ] `[power]` config section
+- [x] Display battery percentage
+- [x] Display charging status (Charging/Discharging/Full/Empty)
+- [x] Gracefully handle systems without batteries
+- [x] `[battery]` config section
+- [x] Display power draw in watts (positive=charging, negative=discharging)
+- [x] Variables: `battery_percentage`, `battery_status`, `battery_power`
+- [x] Conditional variables: `battery_power_charging`, `battery_power_discharging`
 
-**Deliverable**: Prompts can show battery like `{power:yellow}`
+**Deliverable**: ✅ Prompts can show battery like `{battery_percentage:yellow}` with power draw and state-specific coloring
 
 ---
 
@@ -511,12 +517,12 @@
 ## Summary Stats
 
 - **Total Phases**: 17 + Phase 10.5
-- **Completed Phases**: 7 (Phases 1-3, 5, 7, 10, 10.5 complete!)
+- **Completed Phases**: 9 (Phases 1-3, 5-8, 10, 10.5 complete!)
 - **Partial Progress**:
   - Phase 4 (environment variables done)
   - Phase 13-14 (basic daemon done)
 - **Total Features**: ~190+
-- **Completed Features**: ~120 ✅
+- **Completed Features**: ~135 ✅
 - **Test Coverage**: 59 passing tests
 
 ---
@@ -595,16 +601,16 @@
 
 ### 🎯 Next Steps (Breadth-First Approach)
 
-**Missing Moving Pieces** (core architectural components):
+**Core Providers Complete!** All basic data providers are now done:
 1. ~~**Git Provider** (Phase 5)~~ ✅ **COMPLETE**
-2. **IP Provider** (Phase 6) - Basic IPv4/IPv6
-3. **Battery Provider** (Phase 8) - Basic percentage and status
-4. **CLI Polish** (Phase 7) - --version, --validate, --colors
+2. ~~**IP Provider** (Phase 6)~~ ✅ **COMPLETE**
+3. ~~**Battery Provider** (Phase 8)~~ ✅ **COMPLETE**
+4. ~~**CLI Polish** (Phase 7)~~ ✅ **COMPLETE**
 
-**Current Focus**: With git complete, the most valuable next additions would be:
-- **Phase 7 (CLI Polish)**: Complete the remaining CLI features (--version, --validate, --colors)
-- **Phase 6 (IP Provider)**: Add network information for remote work scenarios
-- **Phase 8 (Battery Provider)**: Add battery status for laptop users
+**Current Focus**: With all core providers and CLI features complete, the most valuable next steps would be:
+- **Phase 4**: Complete remaining data provider enhancements (CWD shortening, timezone support)
+- **Phase 11**: Performance optimization with async/await and parallel data fetching
+- **Phase 13-14**: Complete daemon system for sub-millisecond prompts
 
 **Recent Achievements**:
 - ✅ **Responsive Prompts Complete** (Phase 10.5) - Automatic format switching based on terminal width
