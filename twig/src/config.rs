@@ -69,6 +69,13 @@ pub struct PromptConfig {
     pub format_narrow: Option<String>,
     #[serde(default)]
     pub width_threshold: Option<u16>,
+    /// Extra padding (in characters) when deciding to switch to narrow format
+    /// Default: 5 characters. Can be positive, zero, or negative.
+    /// - Positive: Switch before hitting terminal edge (conservative)
+    /// - Zero: Switch exactly at terminal width
+    /// - Negative: Allow prompt to overflow before switching (aggressive)
+    #[serde(default)]
+    pub padding: Option<i32>,
 }
 
 fn default_time_format() -> String {
@@ -164,6 +171,7 @@ mod tests {
             format_wide: None,
             format_narrow: None,
             width_threshold: Some(100),
+            padding: None,
         };
 
         assert_eq!(prompt.get_format(Some(50)), "default");
@@ -179,6 +187,7 @@ mod tests {
             format_wide: None,
             format_narrow: Some("narrow".to_string()),
             width_threshold: Some(100),
+            padding: None,
         };
 
         // Below threshold - use narrow
@@ -201,6 +210,7 @@ mod tests {
             format_wide: Some("wide".to_string()),
             format_narrow: None,
             width_threshold: Some(100),
+            padding: None,
         };
 
         // Below threshold - use default (no narrow configured)
@@ -223,6 +233,7 @@ mod tests {
             format_wide: Some("wide".to_string()),
             format_narrow: Some("narrow".to_string()),
             width_threshold: Some(100),
+            padding: None,
         };
 
         // Below threshold - use narrow
@@ -245,6 +256,7 @@ mod tests {
             format_wide: Some("wide".to_string()),
             format_narrow: Some("narrow".to_string()),
             width_threshold: Some(80),
+            padding: None,
         };
 
         assert_eq!(prompt.get_format(Some(50)), "narrow");
@@ -261,6 +273,7 @@ mod tests {
             format_wide: Some("wide".to_string()),
             format_narrow: Some("narrow".to_string()),
             width_threshold: None,
+            padding: None,
         };
 
         // With no threshold, should return format_wide (for dynamic checking in main)

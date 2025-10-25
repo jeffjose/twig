@@ -1,8 +1,35 @@
 # TODO - Twig Development
 
-## Current Session: Dynamic Responsive Prompt Switching Investigation
+## ✅ RESOLVED: Dynamic Responsive Prompt Switching
 
-### Issue Being Investigated
+### Issue Resolution Summary
+**Root Cause Found**: The `visible_length()` function was counting tcsh escape sequences (`%{...%}`) as visible characters, causing incorrect length calculations (213 chars vs actual ~92 chars).
+
+**Fixes Applied** (2025-10-24):
+1. **Fixed `visible_length()` calculation** (twig/src/main.rs:696-704)
+   - Now strips both raw ANSI codes (`\x1b[...m`) AND shell wrappers (`%{...%}`)
+   - Accurate visible length measurement for all shell modes
+
+2. **Made padding configurable** (twig/src/config.rs:75)
+   - New optional `padding` parameter (default: 5 characters)
+   - Previously hardcoded at 10 characters
+   - Lower default is less conservative, better for most terminals
+
+3. **Updated documentation** (config.toml)
+   - Clarified dynamic switching formula: `length + padding > terminal_width`
+   - Added padding configuration examples
+
+**Status**: ✅ Working correctly
+- Terminal width detection: ✅ Fixed (using stderr fallback)
+- Visible length calculation: ✅ Fixed (strips shell wrappers)
+- Dynamic switching: ✅ Working as designed
+- User tested: ✅ Confirmed working
+
+---
+
+## Previous Investigation (For Reference)
+
+### Original Issue Being Investigated
 **Problem**: Dynamic responsive switching from narrow to wide format doesn't appear to be working correctly in the actual shell prompt.
 
 **User Observation**:

@@ -80,8 +80,8 @@
 #
 # 1. DYNAMIC (no width_threshold) - Smart length-based switching:
 #    - Tries format (or format_wide if available) first
-#    - Measures actual rendered length (strips ANSI codes)
-#    - If length + 10 > terminal_width, switches to format_narrow
+#    - Measures actual rendered length (strips ANSI codes and shell wrappers)
+#    - If length + padding > terminal_width, switches to format_narrow
 #    - Adapts to actual content (long paths trigger narrow even on wide terminals)
 #    - DEFAULT MODE (recommended)
 #
@@ -95,6 +95,11 @@
 # - format_wide: Optional override for wide terminals
 # - format_narrow: Optional override for narrow terminals/long prompts
 # - width_threshold: Optional fixed column threshold (enables static mode)
+# - padding: Optional extra padding in characters (default: 5). Used in dynamic mode.
+#   Can be positive, zero, or negative:
+#     Positive (5-15): Switch before hitting edge (conservative, default: 5)
+#     Zero (0): Switch exactly at terminal width
+#     Negative (-5 to -20): Allow overflow before switching (aggressive)
 #
 # Example - Dynamic (current config below):
 # [prompt]

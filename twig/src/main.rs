@@ -134,18 +134,21 @@ fn main() {
     let mut format_used = format.clone();
     if config.prompt.width_threshold.is_none() {
         if let (Some(width), Some(ref narrow_format)) = (terminal_width, &config.prompt.format_narrow) {
-            // Measure visible length (strip ANSI codes)
+            // Measure visible length (strip ANSI codes and shell wrappers)
             let visible_len = visible_length(&output);
-            let buffer = 10; // Leave some breathing room
+            let padding = config.prompt.padding.unwrap_or(5);
 
             if is_debug {
                 eprintln!("[DEBUG] Rendered prompt visible length: {}", visible_len);
                 eprintln!("[DEBUG] Terminal width: {}", width);
-                eprintln!("[DEBUG] Check: {} + {} > {}? {}", visible_len, buffer, width, visible_len + buffer > width as usize);
+                eprintln!("[DEBUG] Padding: {}", padding);
+                eprintln!("[DEBUG] Check: {} + {} > {}? {}", visible_len, padding, width,
+                          visible_len as i32 + padding > width as i32);
             }
 
             // If prompt is too long, switch to narrow format
-            if visible_len + buffer > width as usize {
+            // Support negative padding to allow overflow before switching
+            if visible_len as i32 + padding > width as i32 {
                 if is_debug {
                     eprintln!("[DEBUG] Switching to narrow format!");
                 }
@@ -343,6 +346,7 @@ fn create_fallback_config() -> Config {
             format_wide: None,
             format_narrow: None,
             width_threshold: None, // Use dynamic length-based switching
+            padding: None, // Default: 5 characters
         },
     }
 }
@@ -686,14 +690,30 @@ fn create_default_config() -> Config {
             format_wide: None,
             format_narrow: None,
             width_threshold: None, // Use dynamic length-based switching by default
+            padding: None, // Default: 5 characters
         },
     }
 }
 
 /// Get visible length of a string (strip ANSI codes and count characters)
 /// This helps measure the actual visual width of the prompt
+/// Handles both raw ANSI codes and shell-wrapped codes (tcsh %{...%}, zsh %{...%})
+/// For multi-line prompts, returns the length of the LONGEST line
 fn visible_length(s: &str) -> usize {
-    strip_ansi_codes(s).chars().count()
+    let without_ansi = strip_ansi_codes(s);
+
+    // Also strip shell escape wrappers: %{...%} (tcsh/zsh)
+    let re = Regex::new(r"%\{[^}]*\}").unwrap();
+    let clean = re.replace_all(&without_ansi, "");
+
+    // For multi-line prompts, get the longest line
+    // Handle both actual newlines and escaped \n sequences
+    let lines: Vec<&str> = clean.split('\n').collect();
+
+    lines.iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0)
 }
 
 /// Process conditional spaces (~) in template
@@ -1410,5 +1430,40 @@ mod tests {
         let vars = vec!["battery_percentage", "battery_power"];
         let providers = registry.determine_providers(&vars);
         assert!(providers.contains(&"battery"));
+    }
+
+    #[test]
+    fn test_visible_length_single_line() {
+        // Test simple single-line prompt
+        let prompt = "user@host:~/path$ ";
+        assert_eq!(visible_length(prompt), 18);
+
+        // Test with ANSI codes
+        let prompt_with_ansi = "\x1b[32muser@host\x1b[0m:~/path$ ";
+        assert_eq!(visible_length(prompt_with_ansi), 18);
+
+        // Test with tcsh wrappers
+        let prompt_tcsh = "%{\x1b[32m%}user@host%{\x1b[0m%}:~/path$ ";
+        assert_eq!(visible_length(prompt_tcsh), 18);
+    }
+
+    #[test]
+    fn test_visible_length_multiline() {
+        // Test multi-line prompt - should return longest line
+        let multiline = "first line is very long (30 chars)\nsecond";
+        assert_eq!(visible_length(multiline), 34); // First line is longer
+
+        let multiline2 = "short\nthis is the much longer second line";
+        assert_eq!(visible_length(multiline2), 35); // Second line is longer
+
+        // Test with ANSI codes in multi-line
+        let multiline_ansi = "\x1b[32mfirst line is very long\x1b[0m\n\x1b[33mshort\x1b[0m";
+        assert_eq!(visible_length(multiline_ansi), 23); // First line without ANSI
+
+        // Test realistic prompt (like user's config)
+        let realistic = "--(time host /very/long/path git)--\n(width:155) ! ";
+        let first_line_len = "--(time host /very/long/path git)--".len();
+        let second_line_len = "(width:155) ! ".len();
+        assert_eq!(visible_length(realistic), first_line_len.max(second_line_len));
     }
 }
