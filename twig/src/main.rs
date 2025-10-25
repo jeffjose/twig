@@ -264,13 +264,13 @@ fn strip_ansi_codes(s: &str) -> String {
 fn create_fallback_config() -> Config {
     Config {
         time: None,
-        hostname: None,
-        cwd: None,
+        hostname: Some(HostnameConfig { name: None }),
+        cwd: Some(CwdConfig { name: None }),
         git: None,
         ip: None,
         battery: None,
         prompt: PromptConfig {
-            format: "[{$USER}@{$HOSTNAME}] ".to_string(),
+            format: "{$USER}@{hostname}:{cwd}$ ".to_string(),
             format_wide: None,
             format_narrow: None,
             width_threshold: 100,
@@ -290,12 +290,9 @@ fn load_config(custom_path: Option<&std::path::Path>) -> (Config, PathBuf) {
                 match toml::from_str::<Config>(&contents) {
                     Ok(config) => config,
                     Err(e) => {
-                        // Config parse error - show helpful message and use fallback
+                        // Config parse error - show error and use fallback
                         eprintln!("\x1b[31mError:\x1b[0m Failed to parse config file: {}", config_path.display());
                         eprintln!("       {}", e);
-                        eprintln!();
-                        eprintln!("\x1b[33mUsing fallback prompt:\x1b[0m [{{$USER}}@{{$HOSTNAME}}]");
-                        eprintln!("\x1b[33mFix your config file and restart.\x1b[0m");
                         eprintln!();
                         create_fallback_config()
                     }
@@ -305,8 +302,6 @@ fn load_config(custom_path: Option<&std::path::Path>) -> (Config, PathBuf) {
                 // File read error
                 eprintln!("\x1b[31mError:\x1b[0m Failed to read config file: {}", config_path.display());
                 eprintln!("       {}", e);
-                eprintln!();
-                eprintln!("\x1b[33mUsing fallback prompt:\x1b[0m [{{$USER}}@{{$HOSTNAME}}]");
                 eprintln!();
                 create_fallback_config()
             }
@@ -331,8 +326,6 @@ fn load_config(custom_path: Option<&std::path::Path>) -> (Config, PathBuf) {
         } else {
             // Custom config path not found
             eprintln!("\x1b[31mError:\x1b[0m Config file not found: {}", config_path.display());
-            eprintln!();
-            eprintln!("\x1b[33mUsing fallback prompt:\x1b[0m [{{$USER}}@{{$HOSTNAME}}]");
             eprintln!();
             create_fallback_config()
         }

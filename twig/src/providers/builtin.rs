@@ -43,8 +43,10 @@ impl Provider for BuiltinProvider {
             let hostname = gethostname()
                 .to_string_lossy()
                 .to_string();
+            // Use short hostname (before first dot) instead of FQDN
+            let short_hostname = hostname.split('.').next().unwrap_or(&hostname).to_string();
             let var_name = hostname_config.name.as_deref().unwrap_or("hostname");
-            vars.insert(var_name.to_string(), hostname);
+            vars.insert(var_name.to_string(), short_hostname);
         }
 
         // Handle [cwd] section
