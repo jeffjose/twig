@@ -283,6 +283,51 @@
 
 ---
 
+## Phase 10.5: Responsive Prompts ✅
+
+**Goal**: Automatic prompt format switching based on terminal width
+
+### Dynamic Length-Based Switching
+- [x] Measure rendered prompt length (strips ANSI codes and shell wrappers)
+- [x] Multi-line prompt support (measures longest line only)
+- [x] Automatic switching when prompt is too long for terminal
+- [x] Configurable padding parameter (positive, zero, or negative)
+- [x] Terminal width detection (stdout with stderr fallback)
+
+### Static Threshold Switching
+- [x] Fixed column-based threshold (`width_threshold` config)
+- [x] Switch format based on terminal width alone
+
+### Format Configuration
+- [x] `format` - Base/fallback format (required)
+- [x] `format_wide` - Optional override for wide terminals
+- [x] `format_narrow` - Optional compact format for narrow terminals
+- [x] `padding` - Optional padding in characters (default: 5)
+  - [x] Positive padding (conservative switching)
+  - [x] Zero padding (exact width)
+  - [x] Negative padding (allow overflow before switching)
+
+### Built-in Variables
+- [x] `{terminal_width}` - Current terminal width in columns
+
+### Technical Implementation
+- [x] Accurate visible length calculation
+  - [x] Strip raw ANSI codes (`\x1b[...m`)
+  - [x] Strip shell wrappers (`%{...%}` for tcsh/zsh, `\[...\]` for bash)
+  - [x] Handle multi-line prompts (longest line only)
+- [x] Debug output for troubleshooting
+  - [x] Show visible length, terminal width, padding
+  - [x] Show switching decision logic
+- [x] Comprehensive test coverage
+  - [x] Single-line prompt tests
+  - [x] Multi-line prompt tests
+  - [x] ANSI code stripping tests
+  - [x] Shell wrapper stripping tests
+
+**Deliverable**: ✅ Prompts automatically adapt to terminal width with configurable switching behavior. 59 tests passing.
+
+---
+
 ## Phase 11: Performance & Async Execution
 
 **Goal**: Make it fast with parallel data fetching
@@ -474,14 +519,15 @@
 
 ## Summary Stats
 
-- **Total Phases**: 17
-- **Completed Phases**: 5 (Phases 1-3, 5, 10 complete!)
+- **Total Phases**: 17 + Phase 10.5
+- **Completed Phases**: 6 (Phases 1-3, 5, 10, 10.5 complete!)
 - **Partial Progress**:
   - Phase 4 (environment variables done)
   - Phase 7 (CLI flags and debug support done)
   - Phase 13-14 (basic daemon done)
-- **Total Features**: ~160+
-- **Completed Features**: ~85 ✅
+- **Total Features**: ~190+
+- **Completed Features**: ~110 ✅
+- **Test Coverage**: 59 passing tests
 
 ---
 
@@ -568,6 +614,12 @@
 - **Phase 8 (Battery Provider)**: Add battery status for laptop users
 
 **Recent Achievements**:
+- ✅ **Responsive Prompts Complete** (Phase 10.5) - Automatic format switching based on terminal width
+  - Dynamic length-based switching with accurate visible length calculation
+  - Multi-line prompt support (measures longest line only)
+  - Configurable padding (positive, zero, or negative)
+  - Fixed bug: Strip shell wrappers (`%{...%}`) in addition to ANSI codes
+  - Comprehensive test coverage (59 tests passing)
 - ✅ **Git Provider Complete** - Full git integration with branch, tracking, status, and elapsed time
 - ✅ Performance optimization - Batched git commands (single call instead of multiple)
 - ✅ Comprehensive git unit tests - All parsing logic covered
