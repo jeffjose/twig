@@ -99,8 +99,8 @@
 # width_threshold = 100
 
 [prompt]
-format_wide = '''--({time:cyan} {hostname:yellow} {ip_address:yellow}~{battery_percentage:yellow}~{battery_power_charging:green}~{battery_power_discharging:yellow} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:cyan})--
+format = '''--({time:cyan} {hostname:yellow} {ip_address:yellow}~{battery_percentage:yellow}~{battery_power_charging:green}~{battery_power_discharging:yellow} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:cyan})--
 (width:{terminal_width:yellow}) {"!":white,bold} '''
 format_narrow = '''{cwd:green}~{git_branch:magenta}{git_status_clean:green}{git_status_unstaged:red}
 (width:{terminal_width:yellow}) {"!":white,bold} '''
-width_threshold = 130
+width_threshold = 100

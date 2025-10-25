@@ -88,27 +88,24 @@ impl PromptConfig {
     /// # Returns
     /// The format string to use (wide, narrow, or default)
     pub fn get_format(&self, terminal_width: Option<u16>) -> &str {
-        // If no terminal width available, use default format
-        let width = match terminal_width {
-            Some(w) => w,
-            None => return &self.format,
-        };
+        // If terminal width is available, check for responsive formats
+        if let Some(width) = terminal_width {
+            // If width is below threshold and narrow format is configured, use it
+            if width < self.width_threshold {
+                if let Some(ref narrow) = self.format_narrow {
+                    return narrow;
+                }
+            }
 
-        // If width is below threshold and narrow format is configured, use it
-        if width < self.width_threshold {
-            if let Some(ref narrow) = self.format_narrow {
-                return narrow;
+            // If width is at/above threshold and wide format is configured, use it
+            if width >= self.width_threshold {
+                if let Some(ref wide) = self.format_wide {
+                    return wide;
+                }
             }
         }
 
-        // If width is at/above threshold and wide format is configured, use it
-        if width >= self.width_threshold {
-            if let Some(ref wide) = self.format_wide {
-                return wide;
-            }
-        }
-
-        // Fallback to default format
+        // Fallback to default format (always available)
         &self.format
     }
 }
