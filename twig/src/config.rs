@@ -67,16 +67,12 @@ pub struct PromptConfig {
     pub format_wide: Option<String>,
     #[serde(default)]
     pub format_narrow: Option<String>,
-    #[serde(default = "default_width_threshold")]
-    pub width_threshold: u16,
+    #[serde(default)]
+    pub width_threshold: Option<u16>,
 }
 
 fn default_time_format() -> String {
     "%H:%M:%S".to_string()
-}
-
-fn default_width_threshold() -> u16 {
-    100
 }
 
 impl PromptConfig {
@@ -87,21 +83,32 @@ impl PromptConfig {
     ///
     /// # Returns
     /// The format string to use (wide, narrow, or default)
+    ///
+    /// # Behavior
+    /// - If width_threshold is set: Static threshold-based switching
+    /// - If width_threshold is None: Returns format_wide for dynamic length checking (handled in main)
     pub fn get_format(&self, terminal_width: Option<u16>) -> &str {
-        // If terminal width is available, check for responsive formats
-        if let Some(width) = terminal_width {
-            // If width is below threshold and narrow format is configured, use it
-            if width < self.width_threshold {
-                if let Some(ref narrow) = self.format_narrow {
-                    return narrow;
+        // If width_threshold is configured, use static threshold-based switching
+        if let Some(threshold) = self.width_threshold {
+            if let Some(width) = terminal_width {
+                // If width is below threshold and narrow format is configured, use it
+                if width < threshold {
+                    if let Some(ref narrow) = self.format_narrow {
+                        return narrow;
+                    }
+                }
+
+                // If width is at/above threshold and wide format is configured, use it
+                if width >= threshold {
+                    if let Some(ref wide) = self.format_wide {
+                        return wide;
+                    }
                 }
             }
-
-            // If width is at/above threshold and wide format is configured, use it
-            if width >= self.width_threshold {
-                if let Some(ref wide) = self.format_wide {
-                    return wide;
-                }
+        } else {
+            // No threshold - use format_wide for dynamic checking (if it exists)
+            if let Some(ref wide) = self.format_wide {
+                return wide;
             }
         }
 
@@ -156,7 +163,7 @@ mod tests {
             format: "default".to_string(),
             format_wide: None,
             format_narrow: None,
-            width_threshold: 100,
+            width_threshold: Some(100),
         };
 
         assert_eq!(prompt.get_format(Some(50)), "default");
@@ -171,7 +178,7 @@ mod tests {
             format: "default".to_string(),
             format_wide: None,
             format_narrow: Some("narrow".to_string()),
-            width_threshold: 100,
+            width_threshold: Some(100),
         };
 
         // Below threshold - use narrow
@@ -193,7 +200,7 @@ mod tests {
             format: "default".to_string(),
             format_wide: Some("wide".to_string()),
             format_narrow: None,
-            width_threshold: 100,
+            width_threshold: Some(100),
         };
 
         // Below threshold - use default (no narrow configured)
@@ -215,7 +222,7 @@ mod tests {
             format: "default".to_string(),
             format_wide: Some("wide".to_string()),
             format_narrow: Some("narrow".to_string()),
-            width_threshold: 100,
+            width_threshold: Some(100),
         };
 
         // Below threshold - use narrow
@@ -237,12 +244,28 @@ mod tests {
             format: "default".to_string(),
             format_wide: Some("wide".to_string()),
             format_narrow: Some("narrow".to_string()),
-            width_threshold: 80,
+            width_threshold: Some(80),
         };
 
         assert_eq!(prompt.get_format(Some(50)), "narrow");
         assert_eq!(prompt.get_format(Some(79)), "narrow");
         assert_eq!(prompt.get_format(Some(80)), "wide");
         assert_eq!(prompt.get_format(Some(100)), "wide");
+    }
+
+    #[test]
+    fn test_get_format_dynamic() {
+        // No threshold - returns wide for dynamic checking
+        let prompt = PromptConfig {
+            format: "default".to_string(),
+            format_wide: Some("wide".to_string()),
+            format_narrow: Some("narrow".to_string()),
+            width_threshold: None,
+        };
+
+        // With no threshold, should return format_wide (for dynamic checking in main)
+        assert_eq!(prompt.get_format(Some(50)), "wide");
+        assert_eq!(prompt.get_format(Some(150)), "wide");
+        assert_eq!(prompt.get_format(None), "wide");
     }
 }

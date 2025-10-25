@@ -110,10 +110,27 @@ fn main() {
     let formatter = get_formatter(shell_mode);
 
     // Perform variable substitution with color support
-    let output = substitute_variables(&format, &variables, formatter.as_ref());
+    let mut output = substitute_variables(&format, &variables, formatter.as_ref());
 
     // Post-process output for shell-specific requirements (e.g., escape newlines for TCSH/Zsh)
-    let output = formatter.finalize(&output);
+    output = formatter.finalize(&output);
+
+    // Dynamic length-based switching (if no width_threshold is set)
+    if config.prompt.width_threshold.is_none() {
+        if let (Some(width), Some(ref narrow_format)) = (terminal_width, &config.prompt.format_narrow) {
+            // Measure visible length (strip ANSI codes)
+            let visible_len = visible_length(&output);
+            let buffer = 10; // Leave some breathing room
+
+            // If prompt is too long, switch to narrow format
+            if visible_len + buffer > width as usize {
+                // Re-render with narrow format
+                output = substitute_variables(narrow_format, &variables, formatter.as_ref());
+                output = formatter.finalize(&output);
+            }
+        }
+    }
+
     let render_time = render_start.elapsed();
 
     let total_time = start.elapsed();
@@ -273,7 +290,7 @@ fn create_fallback_config() -> Config {
             format: "{$USER}@{hostname}:{cwd}$ ".to_string(),
             format_wide: None,
             format_narrow: None,
-            width_threshold: 100,
+            width_threshold: None, // Use dynamic length-based switching
         },
     }
 }
@@ -616,9 +633,15 @@ fn create_default_config() -> Config {
             format: "{time:cyan} {\"@\":yellow,bold} {hostname:magenta} {cwd:green} {\"$\":white,bold} ".to_string(),
             format_wide: None,
             format_narrow: None,
-            width_threshold: 100,
+            width_threshold: None, // Use dynamic length-based switching by default
         },
     }
+}
+
+/// Get visible length of a string (strip ANSI codes and count characters)
+/// This helps measure the actual visual width of the prompt
+fn visible_length(s: &str) -> usize {
+    strip_ansi_codes(s).chars().count()
 }
 
 /// Process conditional spaces (~) in template

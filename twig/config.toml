@@ -76,31 +76,41 @@
 
 # Responsive Prompts - Automatic prompt switching based on terminal width
 #
-# Twig detects your terminal width and selects the appropriate prompt format:
-# - format_wide: Used when terminal width >= width_threshold (default: 100)
-# - format_narrow: Used when terminal width < width_threshold
-# - format: Fallback/default format (always required)
-# - width_threshold: Column threshold for switching (default: 100)
+# Two modes available:
 #
-# Use cases:
-# - Laptop: Narrow terminal → minimal prompt
-# - Desktop: Wide terminal → full-featured prompt
-# - tmux/split panes: Automatically adjusts to pane width
+# 1. DYNAMIC (no width_threshold) - Smart length-based switching:
+#    - Tries format (or format_wide if available) first
+#    - Measures actual rendered length (strips ANSI codes)
+#    - If length + 10 > terminal_width, switches to format_narrow
+#    - Adapts to actual content (long paths trigger narrow even on wide terminals)
+#    - DEFAULT MODE (recommended)
 #
-# Example responsive config:
+# 2. STATIC (with width_threshold) - Fixed threshold switching:
+#    - Uses format_narrow when terminal width < threshold
+#    - Uses format_wide when terminal width >= threshold
+#    - Simple and predictable
+#
+# Variables:
+# - format: Base/fallback format (always required)
+# - format_wide: Optional override for wide terminals
+# - format_narrow: Optional override for narrow terminals/long prompts
+# - width_threshold: Optional fixed column threshold (enables static mode)
+#
+# Example - Dynamic (current config below):
 # [prompt]
-# # Wide terminal (>= 100 cols): Show everything
-# format_wide = "{time} {hostname} {ip_address} {battery_percentage} {cwd} {git_branch}{git_status_clean}"
-# # Narrow terminal (< 100 cols): Minimal
-# format_narrow = "{cwd} {git_branch}"
-# # Default/fallback
-# format = "{cwd}"
-# # Custom threshold (optional)
-# width_threshold = 100
+# format = "{cwd}$ "
+# format_narrow = "{cwd} {git_branch}$ "
+# # No width_threshold = uses dynamic mode
+#
+# Example - Static:
+# [prompt]
+# format = "{cwd}$ "
+# format_wide = "{time} {hostname} {cwd}$ "
+# format_narrow = "{cwd}$ "
+# width_threshold = 100  # Use narrow if width < 100
 
 [prompt]
 format = '''--({time:cyan} {hostname:yellow} {ip_address:yellow}~{battery_percentage:yellow}~{battery_power_charging:green}~{battery_power_discharging:yellow} {cwd:green}~{git_branch:magenta}{git_tracking:magenta}{git_status_clean:green}{git_status_staged:yellow}{git_status_unstaged:red}{git_elapsed:cyan})--
 (width:{terminal_width:yellow}) {"!":white,bold} '''
 format_narrow = '''{cwd:green}~{git_branch:magenta}{git_status_clean:green}{git_status_unstaged:red}
 (width:{terminal_width:yellow}) {"!":white,bold} '''
-width_threshold = 100
