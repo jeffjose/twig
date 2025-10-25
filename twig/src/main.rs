@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
-use terminal_size::{terminal_size, Width};
+use terminal_size::{terminal_size, terminal_size_using_fd, Width};
+use std::os::fd::AsRawFd;
 
 #[derive(Parser)]
 #[command(name = "twig")]
@@ -49,10 +50,24 @@ fn main() {
     let (mut config, config_path) = load_config(cli.config.as_deref());
 
     // Detect terminal width for responsive prompt selection
-    let terminal_width = terminal_size().map(|(Width(w), _)| w);
+    // Try stdout first, then stderr (useful when stdout is captured by shell for prompts)
+    let terminal_width = terminal_size()
+        .or_else(|| {
+            // If stdout doesn't work, try stderr
+            terminal_size_using_fd(std::io::stderr().as_raw_fd())
+        })
+        .map(|(Width(w), _)| w);
 
     // Get the appropriate prompt format based on terminal width
     let format = config.prompt.get_format(terminal_width).to_string();
+
+    let is_debug = cli.debug || std::env::var("TWIG_DEBUG").is_ok();
+    if is_debug {
+        eprintln!("[DEBUG] Initial format selected: {}", if format.len() > 50 { &format[..50] } else { &format });
+        eprintln!("[DEBUG] Terminal width: {:?}", terminal_width);
+        eprintln!("[DEBUG] width_threshold: {:?}", config.prompt.width_threshold);
+        eprintln!("[DEBUG] Has format_narrow: {}", config.prompt.format_narrow.is_some());
+    }
 
     // Apply implicit sections for variables used in template
     apply_implicit_sections(&mut config, &format);
@@ -116,17 +131,32 @@ fn main() {
     output = formatter.finalize(&output);
 
     // Dynamic length-based switching (if no width_threshold is set)
+    let mut format_used = format.clone();
     if config.prompt.width_threshold.is_none() {
         if let (Some(width), Some(ref narrow_format)) = (terminal_width, &config.prompt.format_narrow) {
             // Measure visible length (strip ANSI codes)
             let visible_len = visible_length(&output);
             let buffer = 10; // Leave some breathing room
 
+            if is_debug {
+                eprintln!("[DEBUG] Rendered prompt visible length: {}", visible_len);
+                eprintln!("[DEBUG] Terminal width: {}", width);
+                eprintln!("[DEBUG] Check: {} + {} > {}? {}", visible_len, buffer, width, visible_len + buffer > width as usize);
+            }
+
             // If prompt is too long, switch to narrow format
             if visible_len + buffer > width as usize {
+                if is_debug {
+                    eprintln!("[DEBUG] Switching to narrow format!");
+                }
                 // Re-render with narrow format
                 output = substitute_variables(narrow_format, &variables, formatter.as_ref());
                 output = formatter.finalize(&output);
+                format_used = narrow_format.clone();
+            } else {
+                if is_debug {
+                    eprintln!("[DEBUG] Keeping original format (fits in terminal)");
+                }
             }
         }
     }
@@ -141,6 +171,7 @@ fn main() {
         print_boxed(
             &output,
             &config_path,
+            terminal_width,
             config_time,
             render_time,
             total_time,
@@ -149,7 +180,7 @@ fn main() {
     } else if (cli.debug || std::env::var("TWIG_DEBUG").is_ok()) && cli.mode.is_some() {
         // Debug mode for shell integration: show debug info to stderr, prompt to stdout
         // Enabled via --debug flag or TWIG_DEBUG environment variable
-        print_debug_box(&config_path, config_time, render_time, total_time, &provider_timings);
+        print_debug_box(&config_path, terminal_width, &format_used, config_time, render_time, total_time, &provider_timings);
         print!("{}", output);
     } else {
         // Shell integration or prompt mode: just the prompt, no newline
@@ -161,13 +192,17 @@ fn main() {
 fn print_boxed(
     prompt: &str,
     config_path: &PathBuf,
+    terminal_width: Option<u16>,
     config_time: std::time::Duration,
     render_time: std::time::Duration,
     total_time: std::time::Duration,
     provider_timings: &[providers::ProviderTiming],
 ) {
-    // Display config file path (dimmed)
-    println!("\x1b[2mConfig: {}\x1b[0m", config_path.display());
+    // Display config file path and terminal width (dimmed)
+    let width_str = terminal_width
+        .map(|w| format!(" (width: {})", w))
+        .unwrap_or_default();
+    println!("\x1b[2mConfig: {}{}\x1b[0m", config_path.display(), width_str);
     println!();
 
     // Split prompt into lines and strip ANSI codes from each
@@ -211,12 +246,25 @@ fn print_boxed(
 /// Print debug information in a classy box to stderr
 fn print_debug_box(
     config_path: &PathBuf,
+    terminal_width: Option<u16>,
+    format_used: &str,
     config_time: std::time::Duration,
     render_time: std::time::Duration,
     total_time: std::time::Duration,
     provider_timings: &[providers::ProviderTiming],
 ) {
-    let config_str = format!("📄 Config: {}", config_path.display());
+    let width_str = terminal_width
+        .map(|w| format!(" (width: {})", w))
+        .unwrap_or_default();
+    let config_str = format!("📄 Config: {}{}", config_path.display(), width_str);
+
+    let format_preview = if format_used.len() > 50 {
+        format!("{}...", &format_used[..47])
+    } else {
+        format_used.to_string()
+    };
+    let format_str = format!("📝 Format: {}", format_preview);
+
     let timing_str = format!(
         "⏱️  Timing: {:.2}ms (config: {:.2}ms | render: {:.2}ms)",
         total_time.as_secs_f64() * 1000.0,
@@ -240,13 +288,14 @@ fn print_debug_box(
     };
 
     let config_width = display_width(&config_str);
+    let format_width = display_width(&format_str);
     let timing_width = display_width(&timing_str);
 
     // Calculate widths for provider timings
     let provider_widths: Vec<usize> = provider_strs.iter().map(|s| display_width(s)).collect();
     let max_provider_width = provider_widths.iter().max().copied().unwrap_or(0);
 
-    let max_width = config_width.max(timing_width).max(max_provider_width).max(40);
+    let max_width = config_width.max(format_width).max(timing_width).max(max_provider_width).max(40);
 
     // Top border (account for emoji in header)
     let header = "┌─ 🔍 twig debug ";
@@ -255,6 +304,9 @@ fn print_debug_box(
 
     // Content lines - config first
     eprintln!("│ {}{} │", config_str, " ".repeat(max_width - config_width));
+
+    // Format line
+    eprintln!("│ {}{} │", format_str, " ".repeat(max_width - format_width));
 
     // Provider timing lines - shown before total
     for (provider_str, width) in provider_strs.iter().zip(provider_widths.iter()) {
