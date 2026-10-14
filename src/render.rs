@@ -71,7 +71,17 @@ impl Vars for Ctx<'_> {
                 return Some((text, self.cfg.levels[level as usize]));
             }
             "jobs" => return (!self.jobs.is_empty()).then(|| (self.jobs.clone(), Style::of("cyan"))),
-            "battery" => return self.facts.get("battery").map(|b| (b.clone(), Style::of("yellow"))),
+            // Colored by which way the power goes: green in, orange out,
+            // red when it runs low, muted when full on power.
+            "battery" | "battery_pct" | "battery_watts" | "battery_time" => {
+                let style = match self.facts.get("battery_state").map(String::as_str) {
+                    Some("charging") => "green",
+                    Some("discharging") => "orange",
+                    Some("low") => "red,bold",
+                    _ => "dim",
+                };
+                return self.facts.get(name).map(|b| (b.clone(), Style::of(style)));
+            }
             _ => return self.facts.get(name).map(|v| (v.clone(), plain)),
         };
         Some((v, plain))

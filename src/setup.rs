@@ -298,6 +298,7 @@ const KNOWN: &[&str] = &[
     "time", "host", "fqdn", "user", "ip", "cwd", "dir", "symbol", "status", "duration", "jobs", "notice", "battery", "load",
     "git", "git_branch", "git_ahead", "git_behind", "git_staged", "git_changed", "git_untracked", "git_stash",
     "git_conflicts", "git_clean", "git_dirty", "git_state", "git_remote", "git_age", "pwd",
+    "battery_pct", "battery_watts", "battery_time",
 ];
 
 /// The settings file: whether it reads, and anything in it that can't work
