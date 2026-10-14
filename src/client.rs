@@ -248,7 +248,7 @@ fn timings_box(t: &serde_json::Value, prep: Duration, connect: Duration, total: 
         }
         b
     };
-    let body: Vec<String> = rows
+    let mut body: Vec<String> = rows
         .iter()
         .map(|(name, u)| {
             let pct = u * 100 / total_us;
@@ -257,6 +257,7 @@ fn timings_box(t: &serde_json::Value, prep: Duration, connect: Duration, total: 
             if name.starts_with(' ') { format!("{}{b}", dim.paint(&line)) } else { format!("{line}{b}") }
         })
         .collect();
+    body.push(Style::of("bold").paint(&format!("{:<11}{} 100%", "total", ms(total_us))));
     // The box is what this prompt waited for. What the daemon costs, all
     // told, is in the bottom edge, for reference only: no prompt waits for it.
     let bg = &t["background"];
