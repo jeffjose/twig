@@ -56,6 +56,11 @@ pub fn escape(text: &str) -> String {
     out
 }
 
+/// Before each prompt. $status is saved first: every builtin after it (the
+/// if) sets it again, and the prompt would never see a command fail.
+const PRECMD: &str = "alias precmd 'set _twst = $status; if (! -x \"$_twig\") set _twig = twig; \
+                      set _tw = (\"`$_twig prompt $$ $_twst`\"); set prompt = \"$_tw[1]\"; set rprompt = \"$_tw[2]\"'";
+
 /// `twig init tcsh`: commands for .cshrc, on one line so that
 /// eval "`twig init tcsh`" works.
 pub fn init(args: &[String]) -> i32 {
@@ -75,7 +80,7 @@ pub fn init(args: &[String]) -> i32 {
         // through a mise shim (about 18 ms each); if it goes away (an upgrade),
         // twig from PATH. -x is a builtin test, so the check is free.
         format!("set _twig = \"{exe}\""),
-        "alias precmd 'if (! -x \"$_twig\") set _twig = twig; set _tw = (\"`$_twig prompt $$ $status`\"); set prompt = \"$_tw[1]\"; set rprompt = \"$_tw[2]\"'".into(),
+        PRECMD.into(),
         // The history builtin gives the line about to run, with its event
         // number: an empty line runs postcmd too, and repeats the number.
         // ($_ is the previous command here, and is evaluated again when
@@ -95,6 +100,13 @@ pub fn init(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn precmd_reads_status_before_anything_else() {
+        let body = PRECMD.split_once('\'').unwrap().1;
+        assert!(body.starts_with("set _twst = $status;"), "{body}");
+        assert!(!body[20..].contains("$status"), "$status read again later: {body}");
+    }
 
     #[test]
     fn escapes() {

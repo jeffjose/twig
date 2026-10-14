@@ -32,7 +32,8 @@ twig: a fast tcsh prompt, with a daemon that keeps it up to date.
 Notices: messages on the prompt that go away by themselves.
 
   twig notify [--warn|--error] [--for 10m] [--shows N] [--here] TEXT
-  twig ack [ID]         dismiss one (ids are in twig status), or all in this shell
+  twig notices          the ones showing now, and the last ones to go away
+  twig ack [ID]         dismiss one, or all in this shell
 
 Jobs: commands that run in the background and report on the prompt.
 
@@ -80,7 +81,8 @@ fn main() {
         "z" => dirs::z_cmd(&rest),
         "dirs" => dirs::list_cmd(&rest),
         // The older names lead to the two reports.
-        "status" | "notices" => setup::status(),
+        "status" => setup::status(),
+        "notices" => notices::list_cmd(&rest),
         "info" | "check" | "cost" | "debug" => setup::info(&rest),
         "timings" => client::timings(),
         "setup" => setup::setup(),

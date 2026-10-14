@@ -41,7 +41,9 @@ twig notify backup done                  # for an hour
 twig notify --warn --for 10m deploy is running
 twig notify --error --shows 3 --here look at this    # 3 prompts, this shell only
 twig ack                                 # dismiss what this shell shows
-twig ack 3                               # dismiss one (ids are in twig status)
+twig ack 3                               # dismiss one
+twig notices                             # what is showing, and the last 50 to go
+                                         # (dismissed, expired, or over)
 ```
 
 The daemon makes its own: a disk over 90%, a low battery, a failed

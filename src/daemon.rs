@@ -340,7 +340,10 @@ fn handle(sh: &S, req: Request, t0: Instant) -> Value {
             redraw(sh, |_| true);
             json!({ "acked": n })
         }
-        Request::Notices => json!({ "notices": sh.lock().notices.list }),
+        Request::Notices => {
+            let st = sh.lock();
+            json!({ "notices": st.notices.list, "past": st.notices.past })
+        }
         Request::JobStart { cmd, cwd, shell } => {
             let mut st = sh.lock();
             let id = st.next_job;
