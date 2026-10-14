@@ -258,15 +258,23 @@ fn timings_box(t: &serde_json::Value, prep: Duration, connect: Duration, total: 
         })
         .collect();
     body.push(Style::of("bold").paint(&format!("{:<11}{} 100%", "total", ms(total_us))));
-    // The box is what this prompt waited for. What the daemon costs, all
-    // told, is in the bottom edge, for reference only: no prompt waits for it.
+    // The box is what this prompt waited for. The daemon's last run in the
+    // background is in the bottom edge, for reference only: no prompt
+    // waits for it.
     let bg = &t["background"];
-    let (cpu, up) = (bg["cpu_ms"].as_u64().unwrap_or(0), bg["uptime_s"].as_u64().unwrap_or(0).max(1));
-    let foot = format!(
-        "daemon: {:.3}% of a core, {:.1} MB",
-        cpu as f64 / 10.0 / up as f64,
-        bg["rss_kb"].as_u64().unwrap_or(0) as f64 / 1024.0
-    );
+    let foot = match bg["us"].as_u64() {
+        Some(us) => {
+            let s = bg["ago_s"].as_u64().unwrap_or(0);
+            let ago = match s {
+                0 => "just now".to_string(),
+                1..=59 => format!("{s}s ago"),
+                60..=3599 => format!("{}m ago", s / 60),
+                _ => format!("{}h ago", s / 3600),
+            };
+            format!("daemon: {:.2} ms ({ago})", us as f64 / 1000.0)
+        }
+        None => "daemon: nothing run yet".into(),
+    };
     crate::boxes::draw(&format!("prompt {:.2} ms", total_us as f64 / 1000.0), &body, Some(&foot))
 }
 

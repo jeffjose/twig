@@ -154,17 +154,16 @@ that shell until you run it again:
 │   render     0.04 ms   1% ▏                                        │
 │   escape     0.00 ms   0%                                          │
 │ wire         0.12 ms   4% ▍                                        │
-╰─ daemon: 0.011% of a core, 4.8 MB ─────────────────────────────────╯
+╰─ daemon: 2.55 ms (3s ago) ─────────────────────────────────────────╯
 ```
 
 The box is only what the prompt waited for. `prep` is twig gathering the
 directory and environment, `wire` the socket and the scheduler, and the
 steps under `daemon` its own work; `git wait` is the one step that waits
 on the background, after a command, for up to `git.wait`. Not counted:
-tcsh starting twig, about 0.3 ms. The bottom edge says what the daemon
-costs, all told, for reference: its share of one core since it started
-(with the git and other commands it runs) and its memory. No prompt
-waits for that.
+tcsh starting twig, about 0.3 ms. The bottom edge says how long the
+daemon's last run of work in the background took (a probe, a git status,
+a fetch) and when, for reference. No prompt waits for that.
 
 ## Status and info
 

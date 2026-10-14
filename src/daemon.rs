@@ -182,6 +182,16 @@ struct State {
     started: Instant,
     /// The daemon's steps of the last prompts, for `twig info`.
     prompts: std::collections::VecDeque<Vec<(&'static str, u64)>>,
+    /// The daemon's last run of work in the background (a probe, a git
+    /// status, a fetch): when it ended and how long it took, for
+    /// `twig timings`.
+    last_work: Option<(Instant, Duration)>,
+}
+
+impl State {
+    fn worked(&mut self, took: Duration) {
+        self.last_work = Some((Instant::now(), took));
+    }
 }
 
 struct Shared {
@@ -249,6 +259,7 @@ pub fn run() -> i32 {
         watches: HashMap::new(),
         started: Instant::now(),
         prompts: std::collections::VecDeque::new(),
+        last_work: None,
         host,
     };
     reload(&mut st, true);
@@ -491,8 +502,8 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
     if st.shells.get(&pid).is_some_and(|s| s.timings) {
         let list: Vec<Value> = steps[..steps.len() - 1].iter().map(|(n, u)| json!([n, u])).collect();
         // What the daemon costs, all told, for reference.
-        let (cpu_ms, rss_kb) = own_use();
-        let background = json!({ "cpu_ms": cpu_ms, "rss_kb": rss_kb, "uptime_s": st.started.elapsed().as_secs() });
+        // The daemon's last run in the background, for reference.
+        let background = st.last_work.map(|(at, d)| json!({ "us": d.as_micros() as u64, "ago_s": at.elapsed().as_secs() }));
         reply["timings"] = json!({ "steps": list, "total": steps[steps.len() - 1].1, "background": background });
     }
     if st.prompts.len() >= 1000 {
@@ -569,6 +580,7 @@ fn start_refresh(sh: &S, st: &mut State, root: &Path) {
                 }
             };
             let took = t.elapsed();
+            st.worked(took);
             let Some(r) = st.repos.get_mut(&root) else { return };
             r.cost = took;
             r.spent.add(took);
@@ -786,8 +798,10 @@ fn tick_loop(sh: S) {
                     rs.fetching = true;
                     let (repo, sh2, root) = (rs.repo.clone(), sh.clone(), r.clone());
                     thread::spawn(move || {
+                        let t = Instant::now();
                         git::fetch(&repo, Duration::from_secs(120));
                         let mut st = sh2.lock();
+                        st.worked(t.elapsed());
                         if let Some(rs) = st.repos.get_mut(&root) {
                             rs.fetching = false;
                             rs.fetched = Instant::now();
@@ -812,6 +826,7 @@ fn tick_loop(sh: S) {
                 let out = probes::run(&kind, &cfg);
                 let took = t.elapsed();
                 let mut st = sh2.lock();
+                st.worked(took);
                 if let Some(slot) = st.slots.iter_mut().find(|s| s.name == name) {
                     slot.spent.add(took);
                     slot.running = false;
