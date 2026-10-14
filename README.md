@@ -190,12 +190,12 @@ prompt shows what it finds); git status per repository; the daemon's
 memory and CPU; and the prompt the settings make, with made-up values.
 
 ```
-╭─ probes, in the daemon ──────────────────────────────────────────────────────────╮
-│              every   runs        avg        max  per hour   on the prompt        │
-│ ip             10s    361    0.03 ms    0.20 ms     11 ms   {ip} 192.168.3.134   │
+╭─ probes, in the daemon ────────────────────────────────────────────────────────────╮
+│              every   runs        avg        max  per hour   on the prompt          │
+│ ip             10s    361    0.03 ms    0.20 ms     11 ms   {ip} 192.168.3.134     │
 │ battery        30s    120    0.01 ms    0.14 ms      2 ms   {battery} (empty here) │
-│ units           1m     60    5.09 ms    6.08 ms    305 ms   notices only         │
-╰─ a prompt only reads their last value ───────────────────────────────────────────╯
+│ units           1m     60    5.09 ms    6.08 ms    305 ms   notices only           │
+╰─ a prompt only reads their last value ─────────────────────────────────────────────╯
 ```
 
 ## When the daemon is gone or stuck
