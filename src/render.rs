@@ -4,7 +4,7 @@
 use crate::config::Loaded;
 use crate::git::GitStatus;
 use crate::notices::Level;
-use crate::template::{self, Color, Style, Vars};
+use crate::template::{self, Style, Vars};
 use crate::util::{fmt_duration, strftime, tilde, visible_width};
 use std::collections::HashMap;
 
@@ -27,8 +27,8 @@ pub struct Ctx<'a> {
 }
 
 impl Vars for Ctx<'_> {
-    fn host_color(&self) -> Option<Color> {
-        self.cfg.host_style(self.fqdn, self.host).and_then(|s| s.fg)
+    fn host_style(&self) -> Option<Style> {
+        self.cfg.host_style(self.fqdn, self.host)
     }
 
     fn get(&self, name: &str) -> Option<(String, Style)> {
@@ -38,7 +38,7 @@ impl Vars for Ctx<'_> {
         }
         if name.starts_with("git") {
             return match (self.git, name) {
-                (Some(g), _) => g.var(name),
+                (Some(g), _) => g.var(name, &self.cfg.raw.git.marks, self.time_secs.max(0) as u64),
                 (None, "git_branch") => self.branch.clone().map(|b| (b, plain)),
                 _ => None,
             };
@@ -49,6 +49,7 @@ impl Vars for Ctx<'_> {
             "fqdn" => self.fqdn.to_string(),
             "user" => self.env.get("USER").cloned().unwrap_or_default(),
             "cwd" => tilde(self.cwd, self.env.get("HOME").map(String::as_str).unwrap_or("")),
+            "pwd" => self.cwd.to_string(),
             "dir" => match self.cwd.rsplit('/').next() {
                 Some("") | None => "/".into(),
                 Some(d) => d.to_string(),

@@ -8,10 +8,12 @@
 # when every variable inside it is empty. \[ \] \{ \} for the characters.
 #
 # Variables:
-#   time host fqdn user ip cwd dir symbol status duration
+#   time host fqdn user ip cwd (with ~) pwd (in full) dir symbol status duration
 #   git (all of the status below, together)
 #   git_branch git_ahead git_behind git_staged git_changed git_untracked
 #   git_stash git_conflicts git_clean git_dirty git_state
+#   git_remote ("." even with upstream, "(ahead.2", " (behind.1")
+#   git_age (since the last commit: 12m, 3h, 2w)
 #   jobs notice battery load
 #   and the name of each [[probe]]
 format = """
@@ -43,6 +45,18 @@ duration_min = "2s"
 wait = "80ms"      # how long a prompt waits for a fresh status
 fetch = "15m"      # fetch in the background to see what's new upstream; "off" to not
 poll = "1m"        # look again at repositories with a shell in them
+
+# What goes before each count; these are the defaults.
+[git.marks]
+ahead = "↑"
+behind = "↓"
+staged = "+"
+changed = "~"
+untracked = "?"
+conflicts = "="
+stash = "≡"
+clean = "✔"
+dirty = "*"
 
 [live]
 enabled = true     # redraw the line above the cursor when it changes

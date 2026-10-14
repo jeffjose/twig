@@ -64,6 +64,38 @@ pub struct Git {
     /// made from elsewhere (an editor, another machine). "off" to not.
     pub poll: String,
     pub untracked: bool,
+    /// What goes before each count in {git_staged} and the others.
+    pub marks: Marks,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(default, deny_unknown_fields)]
+pub struct Marks {
+    pub ahead: String,
+    pub behind: String,
+    pub staged: String,
+    pub changed: String,
+    pub untracked: String,
+    pub conflicts: String,
+    pub stash: String,
+    pub clean: String,
+    pub dirty: String,
+}
+
+impl Default for Marks {
+    fn default() -> Self {
+        Marks {
+            ahead: "↑".into(),
+            behind: "↓".into(),
+            staged: "+".into(),
+            changed: "~".into(),
+            untracked: "?".into(),
+            conflicts: "=".into(),
+            stash: "≡".into(),
+            clean: "✔".into(),
+            dirty: "*".into(),
+        }
+    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -193,7 +225,7 @@ impl Default for Prompt {
 
 impl Default for Git {
     fn default() -> Self {
-        Git { enabled: true, wait: "80ms".into(), fetch: "off".into(), poll: "1m".into(), untracked: true }
+        Git { enabled: true, wait: "80ms".into(), fetch: "off".into(), poll: "1m".into(), untracked: true, marks: Marks::default() }
     }
 }
 

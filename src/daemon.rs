@@ -455,13 +455,17 @@ fn start_refresh(sh: &S, st: &mut State, root: &Path) {
     r.refreshing = true;
     r.stale = false;
     let repo = r.repo.clone();
+    let mut last = r.status.clone();
     let sh = sh.clone();
     let root = root.to_path_buf();
     thread::spawn(move || {
         let mut changed = false;
         loop {
             let t = Instant::now();
-            let res = git::status(&repo, untracked, Duration::from_secs(30));
+            let res = git::status(&repo, untracked, Duration::from_secs(30), last.as_ref());
+            if let Ok(s) = &res {
+                last = Some(s.clone());
+            }
             let mut st = sh.lock();
             let Some(r) = st.repos.get_mut(&root) else { return };
             r.cost = t.elapsed();

@@ -93,10 +93,18 @@ impl Style {
         Style::parse(text).unwrap_or_default()
     }
 
-    /// Fill in a host color.
-    pub fn resolve(mut self, host_color: Option<Color>) -> Style {
+    /// Fill in the machine's style from [hosts]: its colors, and bold and
+    /// the like added to those given here.
+    pub fn resolve(mut self, host: Option<Style>) -> Style {
         if self.host {
-            self.fg = host_color.or(self.fg);
+            if let Some(h) = host {
+                self.fg = h.fg.or(self.fg);
+                self.bg = h.bg.or(self.bg);
+                self.bold |= h.bold;
+                self.dim |= h.dim;
+                self.italic |= h.italic;
+                self.underline |= h.underline;
+            }
             self.host = false;
         }
         self
@@ -239,7 +247,7 @@ pub fn variables(nodes: &[Node], out: &mut Vec<String>) {
 /// has when the template doesn't give one.
 pub trait Vars {
     fn get(&self, name: &str) -> Option<(String, Style)>;
-    fn host_color(&self) -> Option<Color>;
+    fn host_style(&self) -> Option<Style>;
 }
 
 pub fn render(nodes: &[Node], vars: &dyn Vars) -> String {
@@ -254,13 +262,13 @@ fn render_into(nodes: &[Node], vars: &dyn Vars, out: &mut String) -> (bool, bool
     for n in nodes {
         match n {
             Node::Text(t) => out.push_str(t),
-            Node::Styled { text, style } => out.push_str(&style.resolve(vars.host_color()).paint(text)),
+            Node::Styled { text, style } => out.push_str(&style.resolve(vars.host_style()).paint(text)),
             Node::Var { name, style } => {
                 any_var = true;
                 if let Some((value, default)) = vars.get(name) {
                     if !value.is_empty() {
                         any_value = true;
-                        let st = style.unwrap_or(default).resolve(vars.host_color());
+                        let st = style.unwrap_or(default).resolve(vars.host_style());
                         out.push_str(&st.paint(&value));
                     }
                 }
@@ -289,8 +297,8 @@ mod tests {
         fn get(&self, name: &str) -> Option<(String, Style)> {
             self.0.get(name).map(|v| (v.to_string(), Style::default()))
         }
-        fn host_color(&self) -> Option<Color> {
-            Some(Color::Basic(4))
+        fn host_style(&self) -> Option<Style> {
+            Some(Style::of("blue,bold"))
         }
     }
 
@@ -311,7 +319,7 @@ mod tests {
     fn styles() {
         assert_eq!(r("{x:green,bold}", &[("x", "v")]), "\x1b[1;32mv\x1b[0m");
         assert_eq!(r("{\"$\":white}", &[]), "\x1b[37m$\x1b[0m");
-        assert_eq!(r("{x:host}", &[("x", "h")]), "\x1b[34mh\x1b[0m");
+        assert_eq!(r("{x:host}", &[("x", "h")]), "\x1b[1;34mh\x1b[0m");
         assert_eq!(Style::of("208 bg:#010203").ansi(), "\x1b[38;5;208;48;2;1;2;3m");
         assert_eq!(Style::of("bright_red").ansi(), "\x1b[91m");
         assert!(Style::parse("blurple").is_err());
