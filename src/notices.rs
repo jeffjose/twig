@@ -5,10 +5,10 @@
 use crate::client;
 use crate::proto::Request;
 use crate::util::{fmt_ago, now_ms, parse_duration};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
     Info = 0,
@@ -54,6 +54,24 @@ pub struct Notices {
     /// until its condition clears or it gets more severe (a disk at 91%
     /// that reaches 98%), however its text changes meanwhile.
     acked: HashMap<String, Level>,
+    /// Where the dismissals are kept, so they last past a restart of the
+    /// daemon (none in tests).
+    file: Option<std::path::PathBuf>,
+}
+
+impl Notices {
+    /// The daemon's notices, with the dismissals kept from before.
+    pub fn load() -> Notices {
+        let file = crate::paths::state_dir().join("dismissed.json");
+        let acked = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        Notices { acked, file: Some(file), ..Notices::default() }
+    }
+
+    fn save_acked(&self) {
+        if let (Some(f), Ok(b)) = (&self.file, serde_json::to_vec(&self.acked)) {
+            let _ = crate::util::atomic_write(f, &b);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -104,7 +122,9 @@ impl Notices {
 
     /// The condition behind a keyed notice is over.
     pub fn clear(&mut self, key: &str) -> bool {
-        self.acked.remove(key);
+        if self.acked.remove(key).is_some() {
+            self.save_acked();
+        }
         let before = self.list.len();
         self.list.retain(|n| n.key.as_deref() != Some(key));
         before != self.list.len()
@@ -158,6 +178,7 @@ impl Notices {
             }
             !hit
         });
+        self.save_acked();
         gone
     }
 

@@ -204,7 +204,7 @@ pub fn run() -> i32 {
         facts: HashMap::new(),
         shells: HashMap::new(),
         repos: HashMap::new(),
-        notices: Notices::default(),
+        notices: Notices::load(),
         next_job: job_list.last().map_or(1, |j| j.id + 1),
         jobs: job_list.into_iter().map(|j| (j.id, j)).collect(),
         history: history::load_all(),

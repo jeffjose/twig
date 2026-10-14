@@ -6,16 +6,15 @@ and anything else you ask it to, records every command, and watches the
 jobs you hand it. Each prompt is a single question to the daemon, answered
 in under a millisecond.
 
-```
--(14:02:51 woodwind 192.168.3.134 ~/scripts/twig main ↑1~2?1)- ⏵ make test 42s        12s
-#
-```
+![Prompts in a git repository: the time a slow command took and the code a failed one ended with on the right, and a notice about the disk](docs/prompt.png)
 
 The prompt changes while you look at it. When the git status changes
 because of something done elsewhere, when a job ends, or when the disk
 fills up, the daemon redraws the line above the cursor. Messages on the
 prompt go away by themselves: after a while, after being seen a few
 times, or when what they were about is over.
+
+![A job started with twig run; the line above the cursor changed to ✔ when it ended, with no key pressed](docs/job.png)
 
 ## Install
 
@@ -120,13 +119,18 @@ command fails.
 
 ## Speed
 
-Measured with hyperfine on an i7-12700K, with the daemon running.
+Measured with hyperfine on an i7-12700K, with the daemon running, in a
+git repository. "In tcsh" is the whole of precmd, timed by running it 200
+times in a tcsh loop: tcsh's fork for the backquotes, twig asking the
+daemon, the daemon drawing the prompt, and tcsh setting it.
 
 | | per prompt |
 |---|---|
-| the old `~/.prompt` (shell script, git status in bash) | 19.7 ms |
-| `twig prompt` | 0.85 ms |
+| the old `~/.prompt` with `~/.aliases`, in tcsh | 19.6 ms |
+| twig's precmd, in tcsh | 1.2 ms |
+| `twig prompt` alone | 0.85 ms |
 | `twig hook` (once per command, for history) | 0.70 ms |
+| a new shell: `twig init tcsh` + loading 1,300 commands of history | 4 ms |
 
 The daemon waits up to 80 ms (`git.wait`) for a fresh git status after a
 command. A repository whose status takes longer gets its prompt at once

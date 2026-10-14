@@ -100,9 +100,11 @@ pub fn render(ctx: &Ctx, cols: Option<u16>) -> (String, String) {
         let mut lines: Vec<String> = prompt.split('\n').map(String::from).collect();
         let i = lines.len() - 2;
         let (lw, rw) = (visible_width(&lines[i]), visible_width(&right));
-        // One column free at the end, so the terminal never wraps the line.
-        if lw + 1 + rw < cols as usize {
-            lines[i] = format!("{}{}{right}", lines[i], " ".repeat(cols as usize - 1 - lw - rw));
+        // Two columns free at the end: tcsh::escape puts a space after a
+        // closing escape before a newline, and a line that then fills the
+        // terminal wraps onto an empty one.
+        if lw + 2 + rw < cols as usize {
+            lines[i] = format!("{}{}{right}", lines[i], " ".repeat(cols as usize - 2 - lw - rw));
             prompt = lines.join("\n");
         }
     }
