@@ -122,6 +122,7 @@ struct RepoState {
     again: bool,
     checked: Instant,
     cost: Duration,
+    spent: Spent,
     fetched: Instant,
     fetching: bool,
     watches: Vec<i32>,
@@ -134,6 +135,30 @@ struct Slot {
     next: Instant,
     running: bool,
     last: Option<Instant>,
+    spent: Spent,
+}
+
+/// What something has cost so far, for `twig cost`.
+#[derive(Clone, Copy, Default)]
+struct Spent {
+    runs: u64,
+    total_us: u64,
+    last_us: u64,
+    max_us: u64,
+}
+
+impl Spent {
+    fn add(&mut self, d: Duration) {
+        let us = d.as_micros() as u64;
+        self.runs += 1;
+        self.total_us += us;
+        self.last_us = us;
+        self.max_us = self.max_us.max(us);
+    }
+
+    fn json(&self) -> Value {
+        json!({ "runs": self.runs, "last_us": self.last_us, "max_us": self.max_us, "avg_us": self.total_us.checked_div(self.runs).unwrap_or(0) })
+    }
 }
 
 struct State {
@@ -155,6 +180,8 @@ struct State {
     inotify: i32,
     watches: HashMap<i32, PathBuf>,
     started: Instant,
+    /// The daemon's steps of the last prompts, for `twig cost`.
+    prompts: std::collections::VecDeque<Vec<(&'static str, u64)>>,
 }
 
 struct Shared {
@@ -221,6 +248,7 @@ pub fn run() -> i32 {
         inotify: unsafe { libc::inotify_init1(libc::IN_CLOEXEC) },
         watches: HashMap::new(),
         started: Instant::now(),
+        prompts: std::collections::VecDeque::new(),
         host,
     };
     reload(&mut st, true);
@@ -331,6 +359,7 @@ fn handle(sh: &S, req: Request, t0: Instant) -> Value {
         }
         Request::Jobs => json!({ "jobs": sh.lock().jobs.values().collect::<Vec<_>>() }),
         Request::Status => status(sh),
+        Request::Cost => cost(sh),
         Request::Reload => {
             let mut st = sh.lock();
             st.cfg_mtime = None;
@@ -355,7 +384,7 @@ fn handle(sh: &S, req: Request, t0: Instant) -> Value {
 
 fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>, t0: Instant) -> Value {
     // Marks for `twig timings`: the time at the end of each step.
-    let mut marks: Vec<(&str, Instant)> = vec![("read", Instant::now())];
+    let mut marks: Vec<(&'static str, Instant)> = vec![("read", Instant::now())];
     let now = now_ms();
     let mut st = sh.lock();
     marks.push(("lock", Instant::now()));
@@ -408,6 +437,7 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
                     fetched: Instant::now(),
                     fetching: false,
                     watches,
+                    spent: Spent::default(),
                 });
             }
             let rs = st.repos.get_mut(&r).expect("just added");
@@ -444,18 +474,24 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
     let (p, right) = (tcsh::escape(&p), tcsh::escape(&right));
     marks.push(("escape", Instant::now()));
     let mut reply = json!({ "prompt": p, "right": right });
-    if st.shells.get(&pid).is_some_and(|s| s.timings) {
-        // Microseconds per step, in order; a step that didn't happen (no
-        // repository) takes no time.
-        let mut steps = Vec::new();
-        let mut prev = t0;
-        for (name, at) in &marks {
-            steps.push(json!([name, at.duration_since(prev).as_micros() as u64]));
-            prev = *at;
-        }
-        let bg = root_cost(&st, pid);
-        reply["timings"] = json!({ "steps": steps, "total": prev.duration_since(t0).as_micros() as u64, "git_status": bg });
+    // Microseconds per step, in order, kept for `twig cost`. A step that
+    // didn't happen (no repository) is not there.
+    let mut steps: Vec<(&'static str, u64)> = Vec::new();
+    let mut prev = t0;
+    for (name, at) in &marks {
+        steps.push((name, at.duration_since(prev).as_micros() as u64));
+        prev = *at;
     }
+    steps.push(("total", prev.duration_since(t0).as_micros() as u64));
+    if st.shells.get(&pid).is_some_and(|s| s.timings) {
+        let bg = root_cost(&st, pid);
+        let list: Vec<Value> = steps[..steps.len() - 1].iter().map(|(n, u)| json!([n, u])).collect();
+        reply["timings"] = json!({ "steps": list, "total": steps[steps.len() - 1].1, "git_status": bg });
+    }
+    if st.prompts.len() >= 1000 {
+        st.prompts.pop_front();
+    }
+    st.prompts.push_back(steps);
     reply
 }
 
@@ -534,6 +570,7 @@ fn start_refresh(sh: &S, st: &mut State, root: &Path) {
             };
             let Some(r) = st.repos.get_mut(&root) else { return };
             r.cost = t.elapsed();
+            r.spent.add(r.cost);
             r.checked = Instant::now();
             match res {
                 Ok(s) => {
@@ -655,13 +692,13 @@ fn reload(st: &mut State, force: bool) -> bool {
             st.cfg_error = None;
             st.notices.clear("config");
             let fqdn = st.facts.get("fqdn").cloned().unwrap_or_else(|| st.host.clone());
-            let old: HashMap<String, (Instant, bool, Option<Instant>)> =
-                st.slots.iter().map(|s| (s.name.clone(), (s.next, s.running, s.last))).collect();
+            let old: HashMap<String, (Instant, bool, Option<Instant>, Spent)> =
+                st.slots.iter().map(|s| (s.name.clone(), (s.next, s.running, s.last, s.spent))).collect();
             st.slots = probes::schedule(&st.cfg, &fqdn, &st.host)
                 .into_iter()
                 .map(|(name, kind, every)| {
-                    let (next, running, last) = old.get(&name).copied().unwrap_or((Instant::now(), false, None));
-                    Slot { name, kind, every, next, running, last }
+                    let (next, running, last, spent) = old.get(&name).copied().unwrap_or((Instant::now(), false, None, Spent::default()));
+                    Slot { name, kind, every, next, running, last, spent }
                 })
                 .collect();
             // Facts and notices of probes that no longer exist.
@@ -770,9 +807,12 @@ fn tick_loop(sh: S) {
             slot.running = true;
             let (kind, name, cfg, sh2) = (slot.kind.clone(), slot.name.clone(), cfg.clone(), sh.clone());
             thread::spawn(move || {
+                let t = Instant::now();
                 let out = probes::run(&kind, &cfg);
+                let took = t.elapsed();
                 let mut st = sh2.lock();
                 if let Some(slot) = st.slots.iter_mut().find(|s| s.name == name) {
+                    slot.spent.add(took);
                     slot.running = false;
                     slot.next = Instant::now() + slot.every;
                     slot.last = Some(Instant::now());
@@ -970,4 +1010,84 @@ fn sd_notify(msg: &str) {
     } else {
         let _ = sock.send_to(msg.as_bytes(), &*path);
     }
+}
+
+/// `twig cost`: what each part of twig costs, from what the daemon has seen.
+fn cost(sh: &S) -> Value {
+    let st = sh.lock();
+    let mut used = Vec::new();
+    for nodes in [Some(&st.cfg.format), st.cfg.narrow.as_ref(), Some(&st.cfg.right)].into_iter().flatten() {
+        crate::template::variables(nodes, &mut used);
+    }
+    let probes: Vec<Value> = st
+        .slots
+        .iter()
+        .map(|s| {
+            // The variables a probe gives; the others only make notices.
+            let vars: Vec<String> = match &s.kind {
+                Kind::Ip => vec!["ip".into()],
+                Kind::Fqdn => vec!["fqdn".into()],
+                Kind::Battery => vec!["battery".into()],
+                Kind::Load => vec!["load".into()],
+                Kind::Custom(i) => st.cfg.probes.get(*i).map(|p| vec![p.0.name.clone()]).unwrap_or_default(),
+                Kind::Disk | Kind::Units | Kind::Reboot => vec![],
+            };
+            let shown: Vec<&String> = vars.iter().filter(|v| used.contains(v)).collect();
+            let value: Vec<String> = vars.iter().filter_map(|v| st.facts.get(v).cloned()).collect();
+            json!({
+                "name": s.name, "every_s": s.every.as_secs_f64(), "spent": s.spent.json(),
+                "vars": vars, "shown": shown, "value": value.join(" "),
+                "notices": matches!(s.kind, Kind::Disk | Kind::Units | Kind::Reboot | Kind::Battery | Kind::Custom(_)),
+            })
+        })
+        .collect();
+    let repos: Vec<Value> = st
+        .repos
+        .iter()
+        .map(|(r, s)| json!({ "root": r, "spent": s.spent.json(), "checked_s": s.checked.elapsed().as_secs() }))
+        .collect();
+    // Each step's times over the prompts kept, sorted, for percentiles.
+    let mut by_step: Vec<(&str, Vec<u64>)> = Vec::new();
+    for p in &st.prompts {
+        for (name, us) in p {
+            match by_step.iter_mut().find(|(n, _)| n == name) {
+                Some((_, v)) => v.push(*us),
+                None => by_step.push((name, vec![*us])),
+            }
+        }
+    }
+    let pct = |v: &[u64], p: f64| v[((v.len() - 1) as f64 * p).round() as usize];
+    let steps: Vec<Value> = by_step
+        .iter_mut()
+        .map(|(name, v)| {
+            v.sort_unstable();
+            json!({ "name": name, "count": v.len(), "p50": pct(v, 0.5), "p95": pct(v, 0.95), "max": v[v.len() - 1] })
+        })
+        .collect();
+    // The daemon's own use of the machine.
+    let tick = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
+    let cpu_ms = fs::read_to_string("/proc/self/stat")
+        .ok()
+        .and_then(|s| {
+            let f: Vec<u64> = s[s.rfind(')')? + 2..].split_whitespace().skip(11).take(2).filter_map(|x| x.parse().ok()).collect();
+            Some(f.iter().sum::<u64>() * 1000 / tick)
+        })
+        .unwrap_or(0);
+    let rss_kb = fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| s.lines().find(|l| l.starts_with("VmRSS:"))?.split_whitespace().nth(1)?.parse::<u64>().ok())
+        .unwrap_or(0);
+    json!({
+        "uptime_s": st.started.elapsed().as_secs(),
+        "cpu_ms": cpu_ms,
+        "rss_kb": rss_kb,
+        "prompts": st.prompts.len(),
+        "steps": steps,
+        "probes": probes,
+        "repos": repos,
+        "used": used,
+        "git_wait_ms": st.cfg.git_wait.as_millis() as u64,
+        "live": st.cfg.raw.live.enabled,
+        "skipped": st.cfg.probes.iter().map(|p| p.0.name.clone()).filter(|n| !st.slots.iter().any(|s| s.name == format!("probe:{n}"))).collect::<Vec<_>>(),
+    })
 }

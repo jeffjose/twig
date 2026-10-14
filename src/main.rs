@@ -24,6 +24,7 @@ twig: a fast tcsh prompt, with a daemon that keeps it up to date.
   twig check [FILE]     read the settings, say what is wrong, show the prompt
   twig remove           take the service off this machine
   twig timings          how long each prompt takes, above it; again to stop
+  twig cost             what each part costs: prompts, probes, git, the daemon
 
 Notices: messages on the prompt that go away by themselves.
 
@@ -84,6 +85,7 @@ fn main() {
         "setup" => setup::setup(),
         "remove" => setup::remove(),
         "timings" => client::timings(),
+        "cost" | "debug" => setup::cost(),
         "restart" => setup::restart(),
         "reload" | "stop" => client::simple(&cmd),
         "" | "help" | "-h" | "--help" => {

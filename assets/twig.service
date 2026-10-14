@@ -1,0 +1,25 @@
+[Unit]
+Description=twig: the daemon behind the tcsh prompt
+# Never given up on. While a tool manager rebuilds twig there is a while
+# with no twig to start; it is tried again until there is one.
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+# A mise shim runs twig as its child; either may say it is ready.
+NotifyAccess=all
+# twig is found as your shell would find it, not at the one path it was set
+# up from: a build of your own in ~/.cargo/bin first, then mise's or the
+# system's. A tool manager may take any one copy away. (ExecStart must
+# itself be a path, so it is env that does the finding.) git and the
+# probes' commands are looked for in the same places.
+Environment=PATH=%h/.cargo/bin:%h/.local/share/mise/shims:%h/.local/bin:%h/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+ExecStart=/usr/bin/env twig daemon
+Restart=on-failure
+RestartSec=2
+# The daemon checks in every second; one that misses 10 seconds of it
+# (stuck, or stopped) is restarted.
+WatchdogSec=10
+
+[Install]
+WantedBy=default.target

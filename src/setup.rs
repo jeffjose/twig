@@ -16,6 +16,10 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
+/// Finds twig through PATH, as a shell would, so that a copy in
+/// ~/.cargo/bin or one from mise both work, whichever exists.
+const UNIT: &str = include_str!("../assets/twig.service");
+
 const CSHRC_LINE: &str = "if ( -X twig ) eval \"`twig init tcsh`\"";
 
 fn unit_file() -> PathBuf {
@@ -69,20 +73,11 @@ pub fn setup() -> i32 {
         println!("history:   {}", paths::history_file(&host).display());
     }
 
-    let Ok(exe) = env::current_exe() else { return 1 };
     // A daemon started by a shell gives way to the service.
     let _ = proto::send(&Request::Stop, Duration::from_secs(2));
     std::thread::sleep(Duration::from_millis(100));
     if has_user_systemd() {
-        let path = env::var("PATH").unwrap_or_default();
-        // The daemon checks in every second; one that misses 10 seconds of
-        // it (stuck, or stopped) is restarted.
-        let unit = format!(
-            "[Unit]\nDescription=twig: the daemon behind the tcsh prompt\n\n[Service]\nType=notify\nNotifyAccess=main\n\
-             ExecStart={} daemon\nEnvironment=PATH={path}\nWatchdogSec=10\nRestart=on-failure\nRestartSec=2\n\n\
-             [Install]\nWantedBy=default.target\n",
-            exe.display()
-        );
+        let unit = UNIT;
         let f = unit_file();
         if let Some(d) = f.parent() {
             let _ = fs::create_dir_all(d);
@@ -215,6 +210,7 @@ pub fn check(args: &[String]) -> i32 {
     // Made-up values, marked as such where they can't be real.
     let mut facts = HashMap::new();
     facts.insert("ip".to_string(), "192.0.2.10".to_string());
+    facts.insert("battery".to_string(), "85%".to_string());
     for p in &probes {
         facts.insert(p.to_string(), format!("‹{p}›"));
     }
@@ -301,4 +297,91 @@ pub fn restart() -> i32 {
     }
     eprintln!("twig: the daemon didn't start; see {}", paths::state_dir().join("daemon.log").display());
     1
+}
+
+/// `twig cost` (or `twig debug`): what each part of twig costs.
+pub fn cost() -> i32 {
+    let v = match proto::send(&Request::Cost, Duration::from_secs(3)) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("twig: the daemon is not running (twig restart)");
+            return 1;
+        }
+    };
+    let color = unsafe { libc::isatty(1) } == 1;
+    let paint = |s: &str, st: &str| if color { Style::of(st).paint(s) } else { s.to_string() };
+    let ms = |us: u64| format!("{:.2} ms", us as f64 / 1000.0);
+    let n = |x: &serde_json::Value| x.as_u64().unwrap_or(0);
+    let home = paths::home().to_string_lossy().into_owned();
+
+    let up = n(&v["uptime_s"]).max(1);
+    let cpu = n(&v["cpu_ms"]);
+    println!(
+        "{}  up {}, {:.1} MB, {} of CPU ({:.3}% of one core)",
+        paint("daemon", "bold"),
+        fmt_duration(up * 1000),
+        n(&v["rss_kb"]) as f64 / 1024.0,
+        fmt_duration(cpu),
+        cpu as f64 / 10.0 / up as f64
+    );
+
+    println!("\n{}{}", paint(&format!("{:<34}", format!("prompts, in the daemon (last {})", v["prompts"])), "bold"), paint("     p50        p95        max", "dim"));
+    for s in v["steps"].as_array().into_iter().flatten() {
+        let name = s["name"].as_str().unwrap_or("");
+        let line = format!("  {:<32}{:>10} {:>10} {:>10}", name, ms(n(&s["p50"])), ms(n(&s["p95"])), ms(n(&s["max"])));
+        println!("{}", if name == "total" { paint(&line, "bold") } else { line });
+    }
+    println!("{}", paint(&format!("  git waits up to {} ms after a command; twig timings shows a prompt's\n  whole time, with twig starting and the socket (about 0.3 ms more)", v["git_wait_ms"]), "dim"));
+
+    println!(
+        "\n{}{}",
+        paint(&format!("{:<14}", "probes"), "bold"),
+        paint("  every    runs        avg        max   per hour   on the prompt", "dim")
+    );
+    let used: Vec<&str> = v["used"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).collect();
+    for p in v["probes"].as_array().into_iter().flatten() {
+        let sp = &p["spent"];
+        let every = p["every_s"].as_f64().unwrap_or(1.0).max(0.001);
+        let per_hour = n(&sp["avg_us"]) as f64 * 3600.0 / every / 1000.0;
+        let vars: Vec<&str> = p["vars"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).collect();
+        let shown = vars.iter().filter(|v| used.contains(v)).map(|v| format!("{{{v}}}")).collect::<Vec<_>>();
+        let value = p["value"].as_str().unwrap_or("");
+        let where_ = if !shown.is_empty() {
+            format!("{} {}", shown.join(" "), paint(if value.is_empty() { "(empty here)" } else { value }, "dim"))
+        } else if vars.iter().any(|v| *v == "fqdn") {
+            paint("the full host name, for the colors in [hosts]", "dim")
+        } else if !vars.is_empty() {
+            paint(&format!("{{{}}} not in the template{}", vars.join("} {"), if p["notices"].as_bool() == Some(true) { "; notices" } else { "" }), "dim")
+        } else {
+            paint("notices only", "dim")
+        };
+        let name = p["name"].as_str().unwrap_or("").trim_start_matches("probe:");
+        println!(
+            "  {:<12}{:>7} {:>7} {:>10} {:>10} {:>10}   {where_}",
+            name,
+            fmt_duration((every * 1000.0) as u64),
+            n(&sp["runs"]),
+            ms(n(&sp["avg_us"])),
+            ms(n(&sp["max_us"])),
+            format!("{per_hour:.0} ms"),
+        );
+    }
+    for s in v["skipped"].as_array().into_iter().flatten() {
+        println!("  {:<12}{}", s.as_str().unwrap_or(""), paint("not on this machine (hosts)", "dim"));
+    }
+    println!("{}", paint("  probes run in the daemon, away from the prompt; a prompt only reads their last value", "dim"));
+
+    println!("\n{}{}", paint(&format!("{:<34}", "git status, in the background"), "bold"), paint("runs        avg        max   last", "dim"));
+    for r in v["repos"].as_array().into_iter().flatten() {
+        let sp = &r["spent"];
+        println!(
+            "  {:<32}{:>4} {:>10} {:>10}   {}s ago",
+            tilde(r["root"].as_str().unwrap_or(""), &home),
+            n(&sp["runs"]),
+            ms(n(&sp["avg_us"])),
+            ms(n(&sp["max_us"])),
+            r["checked_s"]
+        );
+    }
+    0
 }

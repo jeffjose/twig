@@ -161,6 +161,37 @@ that shell until you run it again:
 and the scheduler, and the steps under `daemon` its own work. Not counted:
 tcsh starting twig, about 0.3 ms.
 
+`twig cost` is the long view, from everything the daemon has seen since
+it started: each step of a prompt over the last thousand (typical, slow
+and worst), each probe (how often it runs, what a run takes, what that
+comes to in an hour, and whether the prompt shows what it finds), git
+status per repository, and the daemon's own memory and CPU.
+
+```
+probes          every    runs        avg        max   per hour   on the prompt
+  ip              10s     361    0.03 ms    0.20 ms      11 ms   {ip} 192.168.3.134
+  battery         30s     120    0.01 ms    0.14 ms       2 ms   {battery} (empty here)
+  units         1m00s      60    5.09 ms    6.08 ms     305 ms   notices only
+```
+
+## When the daemon is gone or stuck
+
+A prompt never waits on a daemon that isn't there: twig draws it itself,
+with what it can find quickly (no address, no git counts), says
+`twig daemon not running; starting it`, and starts one. A daemon that
+doesn't answer within 400 ms costs that one prompt; then every shell
+leaves it alone for 15 s, drawing its own prompts in about 2 ms with
+`twig daemon not answering`. Under systemd the daemon checks in every
+second and is restarted by the watchdog when it stops; one that a shell
+started is killed and started again by the next shell that finds it still
+not answering. A git status that fails or times out is a notice until one
+succeeds. `twig restart` restarts the daemon, with systemd or without.
+
+The service finds twig through PATH, as clutch does: a build of your own
+in `~/.cargo/bin` first, then mise's, then the system's. A shell finds it
+once when it starts, so prompts don't go through a mise shim (18 ms each),
+and goes back to PATH if that copy is removed.
+
 ## How it works
 
 tcsh runs `precmd` before each prompt and `postcmd` before each command.

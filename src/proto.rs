@@ -25,6 +25,8 @@ pub enum Request {
     Jobs,
     /// Turn the timings line on or off for a shell.
     Timings { pid: u32 },
+    /// What everything costs: prompts, probes, git, the daemon.
+    Cost,
     Status,
     Reload,
     Stop,
