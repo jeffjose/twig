@@ -75,14 +75,14 @@ pub fn init(args: &[String]) -> i32 {
         // through a mise shim (about 18 ms each); if it goes away (an upgrade),
         // twig from PATH. -x is a builtin test, so the check is free.
         format!("set _twig = \"{exe}\""),
-        format!("alias precmd 'if (! -x \"$_twig\") set _twig = twig; set _tw = (\"`$_twig prompt $$ $status`\"); set prompt = \"$_tw[1]\"; set rprompt = \"$_tw[2]\"'"),
+        "alias precmd 'if (! -x \"$_twig\") set _twig = twig; set _tw = (\"`$_twig prompt $$ $status`\"); set prompt = \"$_tw[1]\"; set rprompt = \"$_tw[2]\"'".into(),
         // The history builtin gives the line about to run, with its event
         // number: an empty line runs postcmd too, and repeats the number.
         // ($_ is the previous command here, and is evaluated again when
         // quoted into a command.)
-        format!("alias postcmd 'history 1 >! \"$_twig_rt/cmd.$$\"; $_twig hook $$'"),
-        format!("alias _twig_pick '$_twig pick $$ && history -L \"$_twig_rt/pick.$$\"'"),
-        format!("alias z 'set _twz = \"`$_twig z \\!*`\"; if (\"$_twz\" != \"\") cd \"$_twz\"'"),
+        "alias postcmd 'history 1 >! \"$_twig_rt/cmd.$$\"; $_twig hook $$'".into(),
+        "alias _twig_pick '$_twig pick $$ && history -L \"$_twig_rt/pick.$$\"'".into(),
+        "alias z 'set _twz = \"`$_twig z \\!*`\"; if (\"$_twz\" != \"\") cd \"$_twz\"'".into(),
         format!("bindkey -s '{key}' '^A^K_twig_pick^M^P'"),
         "unset savehist".into(),
         format!("set history = {}", cfg.history.size),

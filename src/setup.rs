@@ -348,7 +348,7 @@ pub fn cost() -> i32 {
         let value = p["value"].as_str().unwrap_or("");
         let where_ = if !shown.is_empty() {
             format!("{} {}", shown.join(" "), paint(if value.is_empty() { "(empty here)" } else { value }, "dim"))
-        } else if vars.iter().any(|v| *v == "fqdn") {
+        } else if vars.contains(&"fqdn") {
             paint("the full host name, for the colors in [hosts]", "dim")
         } else if !vars.is_empty() {
             paint(&format!("{{{}}} not in the template{}", vars.join("} {"), if p["notices"].as_bool() == Some(true) { "; notices" } else { "" }), "dim")
