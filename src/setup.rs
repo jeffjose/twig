@@ -8,7 +8,7 @@ use crate::paths;
 use crate::proto::{self, Request};
 use crate::render::{self, Ctx};
 use crate::template::{self, Style};
-use crate::util::{fmt_duration, now_ms, tilde};
+use crate::util::{fmt_duration, now_ms, tilde, visible_width};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -209,12 +209,22 @@ pub fn check(args: &[String]) -> i32 {
 
     let env: HashMap<String, String> = env::vars().collect();
     let host = paths::hostname();
+    // Made-up values, marked as such where they can't be real.
     let mut facts = HashMap::new();
-    facts.insert("ip".to_string(), "192.168.1.20".to_string());
+    facts.insert("ip".to_string(), "192.0.2.10".to_string());
     for p in &probes {
-        facts.insert(p.to_string(), p.to_string());
+        facts.insert(p.to_string(), format!("‹{p}›"));
     }
-    let git = GitStatus { branch: "main".into(), upstream: true, ahead: 1, changed: 2, untracked: 1, ..Default::default() };
+    let now = now_ms() / 1000;
+    let git = GitStatus {
+        branch: "main".into(),
+        upstream: true,
+        ahead: 1,
+        changed: 2,
+        untracked: 1,
+        commit_time: Some(now - 3 * 3600),
+        ..Default::default()
+    };
     let cwd = env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
     let ctx = |status, notice: Option<(String, Level, usize)>| Ctx {
         cfg: &cfg,
@@ -224,26 +234,34 @@ pub fn check(args: &[String]) -> i32 {
         env: &env,
         status,
         duration_ms: Some(12_400),
-        time_secs: (now_ms() / 1000) as i64,
+        time_secs: now as i64,
         facts: &facts,
         branch: None,
         git: Some(&git),
         notice,
         jobs: "⏵ make test 1m12s".into(),
     };
-    let show = |title: &str, c: &Ctx, cols: Option<u16>| {
-        let (p, r) = render::render(c, cols);
-        println!("\n{}", Style::of("dim").paint(title));
-        let lines: Vec<&str> = p.split('\n').collect();
-        for (i, l) in lines.iter().enumerate() {
-            if i + 1 == lines.len() {
-                println!("{l}{}", if r.is_empty() { String::new() } else { format!("   {} {r}", Style::of("dim").paint("right:")) });
-            } else {
-                println!("{l}");
-            }
+    let term = crate::util::tty_columns("/dev/tty").unwrap_or(100) as usize;
+    let dim = Style::of("dim");
+    // Each sample in a box as wide as it says, so it can't be mistaken for
+    // the real prompt around it.
+    let boxed = |title: &str, c: &Ctx, cols: usize| {
+        let (p, r) = render::render(c, Some(cols as u16));
+        let mut lines: Vec<String> = p.split('\n').map(String::from).collect();
+        if !r.is_empty() {
+            let last = lines.len() - 1;
+            lines[last] = format!("{}{}{r}", lines[last], " ".repeat(cols.saturating_sub(visible_width(&lines[last]) + visible_width(&r) + 1)));
         }
+        let inner = lines.iter().map(|l| visible_width(l)).max().unwrap_or(0).max(visible_width(title) + 3);
+        let head = format!("─ {title} ");
+        println!("\n{}", dim.paint(&format!("╭{head}{}╮", "─".repeat(inner + 2 - visible_width(&head).min(inner + 2)))));
+        for l in &lines {
+            println!("{} {l}\x1b[0m{} {}", dim.paint("│"), " ".repeat(inner - visible_width(l)), dim.paint("│"));
+        }
+        println!("{}", dim.paint(&format!("╰{}╯", "─".repeat(inner + 2))));
     };
-    show("as it looks:", &ctx(0, Some(("disk / 93% full, 12G left".into(), Level::Warn, 1))), None);
-    show("after a failed command, in 60 columns:", &ctx(2, None), Some(60));
+    let wide = term.saturating_sub(4).max(40);
+    boxed(&format!("sample, made-up values, {wide} columns"), &ctx(0, Some(("disk / 93% full, 12G left".into(), Level::Warn, 1))), wide);
+    boxed("after a failed command, 60 columns", &ctx(2, None), 60);
     if problems > 0 { 1 } else { 0 }
 }
