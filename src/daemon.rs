@@ -603,12 +603,12 @@ fn reload(st: &mut State, force: bool) -> bool {
             }
         }
         Err(e) => {
-            let first = e.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+            let what = config::summary(&e, fs::read_to_string(&path).ok().as_deref());
             eprintln!("twig: settings: {e}");
             st.cfg_error = Some(e);
             st.notices.put(New {
                 key: Some("config".into()),
-                text: format!("twig settings not read: {first} (twig check)"),
+                text: format!("twig settings not read: {what} (twig check)"),
                 level: Level::Error,
                 ttl_ms: None,
                 shows: None,

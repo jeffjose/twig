@@ -34,8 +34,22 @@ fn has_user_systemd() -> bool {
 /// `twig setup`
 pub fn setup() -> i32 {
     let cfg = paths::config_file();
+    let text = fs::read_to_string(&cfg).ok();
+    // The old twig's settings, at the same path: set them aside. A link
+    // (to dotfiles) is left alone; that file is fixed where it lives.
+    let is_link = fs::symlink_metadata(&cfg).is_ok_and(|m| m.file_type().is_symlink());
+    if !is_link && text.as_deref().is_some_and(config::looks_old) {
+        let aside = cfg.with_extension("toml.old-twig");
+        match fs::rename(&cfg, &aside) {
+            Ok(_) => println!("settings:  the old twig's {} moved to {}", cfg.display(), aside.display()),
+            Err(e) => eprintln!("twig: {}: {e}", cfg.display()),
+        }
+    }
     if cfg.exists() {
-        println!("settings:  {} (kept)", cfg.display());
+        match config::read(&cfg) {
+            Ok(_) => println!("settings:  {} (kept)", cfg.display()),
+            Err(e) => println!("settings:  {} (kept, but not read: {})", cfg.display(), config::summary(&e, text.as_deref())),
+        }
     } else {
         if let Some(d) = cfg.parent() {
             let _ = fs::create_dir_all(d);
@@ -168,6 +182,12 @@ pub fn check(args: &[String]) -> i32 {
         Ok(c) => c,
         Err(e) => {
             eprintln!("✘ {}\n  {}", path.display(), e.replace('\n', "\n  "));
+            if fs::read_to_string(&path).is_ok_and(|t| config::looks_old(&t)) {
+                eprintln!(
+                    "\nThis is the settings file of the old twig, before the rewrite. Move it aside\n\
+                     and run `twig setup` for a new one (or link your own, as ~/dotfiles/setup does)."
+                );
+            }
             return 1;
         }
     };

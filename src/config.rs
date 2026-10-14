@@ -261,6 +261,28 @@ pub struct Loaded {
     pub probes: Vec<(Probe, Duration, Duration)>,
 }
 
+/// An error in one line, for the prompt: where it is and what is wrong
+/// ("line 120: unknown field `format_narrow`"), from the parser's message,
+/// which has the line first and the reason last.
+pub fn summary(err: &str, text: Option<&str>) -> String {
+    if text.is_some_and(looks_old) {
+        return "this is the old twig's settings file; see twig setup".into();
+    }
+    let lines: Vec<&str> = err.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let line = lines.first().and_then(|l| l.split("at line ").nth(1)).and_then(|l| l.split(',').next());
+    let reason = lines.last().copied().unwrap_or("").split(", expected").next().unwrap_or("");
+    match line {
+        Some(n) if lines.len() > 1 => format!("line {n}: {reason}"),
+        _ => reason.to_string(),
+    }
+}
+
+/// The settings file of the twig before the rewrite, which used the same
+/// path with other names.
+pub fn looks_old(text: &str) -> bool {
+    ["format_narrow", "{hostname", "{ip_address", "{git_status_", "width_threshold"].iter().any(|s| text.contains(s))
+}
+
 pub fn read(path: &Path) -> Result<Loaded, String> {
     match fs::read_to_string(path) {
         Ok(text) => parse(&text),
@@ -367,6 +389,15 @@ mod tests {
         assert!(parse("[git]\nwait = 'soon'").unwrap_err().contains("git.wait"));
         assert!(parse("[hosts]\nx = 'blurple'").is_err());
         assert!(parse("[[probe]]\nname = 'a b'\nrun = 'x'").is_err());
+    }
+
+    #[test]
+    fn errors_in_one_line() {
+        let e = parse("[prompt]\nformat = 'x'\n\nnarow = 'y'\n").unwrap_err();
+        assert_eq!(summary(&e, None), "line 4: unknown field `narow`");
+        let old = "[prompt]\nformat_narrow = '{cwd}'\n";
+        assert!(summary(&parse(old).unwrap_err(), Some(old)).contains("old twig"));
+        assert!(!looks_old(STARTER));
     }
 
     #[test]
