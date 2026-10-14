@@ -31,6 +31,26 @@ pub fn draw(title: &str, body: &[String], foot: Option<&str>) -> Vec<String> {
     out
 }
 
+/// Two boxes side by side, the shorter one padded below, when both fit in
+/// `width` columns; otherwise one above the other.
+pub fn beside(left: &[String], right: &[String], width: usize) -> Vec<String> {
+    let lw = left.iter().map(|l| visible_width(l)).max().unwrap_or(0);
+    let rw = right.iter().map(|l| visible_width(l)).max().unwrap_or(0);
+    if lw + 2 + rw > width {
+        let mut out = left.to_vec();
+        out.push(String::new());
+        out.extend(right.iter().cloned());
+        return out;
+    }
+    (0..left.len().max(right.len()))
+        .map(|i| {
+            let l = left.get(i).map(String::as_str).unwrap_or("");
+            let r = right.get(i).map(String::as_str).unwrap_or("");
+            format!("{l}{}  {r}", " ".repeat(lw - visible_width(l)))
+        })
+        .collect()
+}
+
 /// A labeled row, its items separated by dots and wrapped under the first
 /// one to fit `width` columns.
 pub fn row(label: &str, items: &[String], width: usize) -> Vec<String> {

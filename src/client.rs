@@ -248,7 +248,7 @@ fn timings_box(t: &serde_json::Value, prep: Duration, connect: Duration, total: 
         }
         b
     };
-    let mut body: Vec<String> = rows
+    let body: Vec<String> = rows
         .iter()
         .map(|(name, u)| {
             let pct = u * 100 / total_us;
@@ -257,10 +257,17 @@ fn timings_box(t: &serde_json::Value, prep: Duration, connect: Duration, total: 
             if name.starts_with(' ') { format!("{}{b}", dim.paint(&line)) } else { format!("{line}{b}") }
         })
         .collect();
-    if let Some(g) = t["git_status"].as_u64() {
-        body.push(dim.paint(&format!("{:<11}{}  in the background", "git status", ms(g))));
-    }
-    crate::boxes::draw(&format!("twig {:.2} ms", total_us as f64 / 1000.0), &body, None)
+    // The box is what this prompt waited for. The daemon's work in the
+    // background since the last prompt is in the bottom edge, for
+    // reference only: no prompt waited for it.
+    let bg = &t["background"];
+    let (bg_us, runs) = (bg["us"].as_u64().unwrap_or(0), bg["runs"].as_u64().unwrap_or(0));
+    let foot = format!(
+        "daemon: {:.1} ms in the background since the last prompt ({runs} run{})",
+        bg_us as f64 / 1000.0,
+        if runs == 1 { "" } else { "s" }
+    );
+    crate::boxes::draw(&format!("prompt {:.2} ms", total_us as f64 / 1000.0), &body, Some(&foot))
 }
 
 /// `twig timings`: show, above each prompt of this shell, how long drawing

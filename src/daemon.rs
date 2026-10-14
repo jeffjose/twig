@@ -55,6 +55,8 @@ struct Shell {
     root: Option<PathBuf>,
     /// Show how long each part of drawing the prompt took (`twig timings`).
     timings: bool,
+    /// State::bg at this shell's last prompt.
+    bg_seen: (u64, u64),
     /// The line above the cursor as last drawn.
     info: Option<String>,
 }
@@ -76,6 +78,7 @@ impl Shell {
             cols: None,
             root: None,
             timings: false,
+            bg_seen: (0, 0),
             info: None,
         }
     }
@@ -182,6 +185,10 @@ struct State {
     started: Instant,
     /// The daemon's steps of the last prompts, for `twig info`.
     prompts: std::collections::VecDeque<Vec<(&'static str, u64)>>,
+    /// All the work done in the background so far (probes, git status,
+    /// fetches): microseconds and runs. A shell's timings show what was
+    /// added since its last prompt.
+    bg: (u64, u64),
 }
 
 struct Shared {
@@ -249,6 +256,7 @@ pub fn run() -> i32 {
         watches: HashMap::new(),
         started: Instant::now(),
         prompts: std::collections::VecDeque::new(),
+        bg: (0, 0),
         host,
     };
     reload(&mut st, true);
@@ -399,6 +407,11 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
     shell.cwd = cwd.clone();
     shell.env = env.into_iter().collect();
     shell.busy = false;
+    // A prompt is on its way: no redraws until it has been drawn (SETTLE
+    // after the answer). Not only after it: the git status this prompt
+    // waits for may finish, and redraw, before then, and twig prompt runs
+    // in the shell's own process group, so the shell looks idle meanwhile.
+    shell.replied = Instant::now();
     shell.time_secs = (now / 1000) as i64;
     if shell.tty.is_none() {
         shell.tty = tty_of(pid);
@@ -483,23 +496,19 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
         prev = *at;
     }
     steps.push(("total", prev.duration_since(t0).as_micros() as u64));
+    // The background work since this shell's last prompt, for reference.
+    let bg = st.bg;
+    let seen = st.shells.get_mut(&pid).map(|s| std::mem::replace(&mut s.bg_seen, bg)).unwrap_or(bg);
     if st.shells.get(&pid).is_some_and(|s| s.timings) {
-        let bg = root_cost(&st, pid);
         let list: Vec<Value> = steps[..steps.len() - 1].iter().map(|(n, u)| json!([n, u])).collect();
-        reply["timings"] = json!({ "steps": list, "total": steps[steps.len() - 1].1, "git_status": bg });
+        let background = json!({ "us": bg.0.saturating_sub(seen.0), "runs": bg.1.saturating_sub(seen.1) });
+        reply["timings"] = json!({ "steps": list, "total": steps[steps.len() - 1].1, "background": background });
     }
     if st.prompts.len() >= 1000 {
         st.prompts.pop_front();
     }
     st.prompts.push_back(steps);
     reply
-}
-
-/// How long the last git status took for a shell's repository, in the
-/// background (microseconds).
-fn root_cost(st: &State, pid: u32) -> Option<u64> {
-    let root = st.shells.get(&pid)?.root.as_ref()?;
-    Some(st.repos.get(root)?.cost.as_micros() as u64)
 }
 
 fn render_for(st: &State, pid: u32, now: u64) -> Option<(String, String)> {
@@ -568,9 +577,12 @@ fn start_refresh(sh: &S, st: &mut State, root: &Path) {
                     st.notices.put(New { key: Some(key), text, level: Level::Warn, ttl_ms: None, shows: None, pid: None })
                 }
             };
+            let took = t.elapsed();
+            st.bg.0 += took.as_micros() as u64;
+            st.bg.1 += 1;
             let Some(r) = st.repos.get_mut(&root) else { return };
-            r.cost = t.elapsed();
-            r.spent.add(r.cost);
+            r.cost = took;
+            r.spent.add(took);
             r.checked = Instant::now();
             match res {
                 Ok(s) => {
@@ -785,8 +797,11 @@ fn tick_loop(sh: S) {
                     rs.fetching = true;
                     let (repo, sh2, root) = (rs.repo.clone(), sh.clone(), r.clone());
                     thread::spawn(move || {
+                        let t = Instant::now();
                         git::fetch(&repo, Duration::from_secs(120));
                         let mut st = sh2.lock();
+                        st.bg.0 += t.elapsed().as_micros() as u64;
+                        st.bg.1 += 1;
                         if let Some(rs) = st.repos.get_mut(&root) {
                             rs.fetching = false;
                             rs.fetched = Instant::now();
@@ -811,6 +826,8 @@ fn tick_loop(sh: S) {
                 let out = probes::run(&kind, &cfg);
                 let took = t.elapsed();
                 let mut st = sh2.lock();
+                st.bg.0 += took.as_micros() as u64;
+                st.bg.1 += 1;
                 if let Some(slot) = st.slots.iter_mut().find(|s| s.name == name) {
                     slot.spent.add(took);
                     slot.running = false;

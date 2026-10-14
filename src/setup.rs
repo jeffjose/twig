@@ -449,8 +449,9 @@ pub fn restart() -> i32 {
     1
 }
 
-/// What each part of twig costs, from the daemon's answer to Cost, in a box
-/// for each: prompts, probes, git; then the daemon's own use.
+/// What each part of twig costs, from the daemon's answer to Cost, in two
+/// boxes, side by side where they fit: the prompt (what a shell waits for)
+/// and the daemon (what it does in the background).
 fn cost_boxes(v: &serde_json::Value) {
     println!();
     let color = unsafe { libc::isatty(1) } == 1;
@@ -459,31 +460,24 @@ fn cost_boxes(v: &serde_json::Value) {
     let ms = |us: u64| format!("{:.2} ms", us as f64 / 1000.0);
     let n = |x: &serde_json::Value| x.as_u64().unwrap_or(0);
     let home = paths::home().to_string_lossy().into_owned();
-    let show = |title: &str, body: &[String], foot: Option<&str>| {
-        for l in boxes::draw(title, body, foot) {
-            println!("{l}");
-        }
-    };
 
-    // Prompts: each step, typical, slow and worst.
+    // The prompt: each step, typical, slow and worst.
     let mut body = vec![dim(&format!("{:<12}{:>10} {:>10} {:>10}", "", "p50", "p95", "max"))];
     for s in v["steps"].as_array().into_iter().flatten() {
         let name = s["name"].as_str().unwrap_or("");
         let cells = format!("{:>10} {:>10} {:>10}", ms(n(&s["p50"])), ms(n(&s["p95"])), ms(n(&s["max"])));
         body.push(if name == "total" { paint(&format!("{name:<12}{cells}"), "bold") } else { format!("{}{cells}", dim(&format!("{name:<12}"))) });
     }
-    let up = n(&v["uptime_s"]).max(1);
-    let cpu = n(&v["cpu_ms"]);
-    show(
-        &format!("prompts, in the daemon · last {}", n(&v["prompts"])),
-        &body,
-        Some(&format!("git waits up to {} ms after a command", n(&v["git_wait_ms"]))),
-    );
+    body.push(String::new());
+    body.push(dim(&format!("git is waited for up to {} ms,", n(&v["git_wait_ms"]))));
+    body.push(dim("and only after a command"));
+    let prompt = boxes::draw(&format!("prompt, you wait · last {}", n(&v["prompts"])), &body, None);
 
-    // Probes: how often, what a run takes, what that is per hour, and
-    // whether the prompt shows what they find.
+    // The daemon: each probe (how often, what a run takes, what that is an
+    // hour, and whether the prompt shows what it finds), git status per
+    // repository, and its own memory and CPU.
     let used: Vec<&str> = v["used"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).collect();
-    let mut body = vec![dim(&format!("{:<12}{:>6} {:>6} {:>10} {:>10} {:>9}   {}", "", "every", "runs", "avg", "max", "per hour", "on the prompt"))];
+    let mut body = vec![dim(&format!("{:<12}{:>6} {:>6} {:>10} {:>10} {:>9}   {}", "probes", "every", "runs", "avg", "max", "per hour", "on the prompt"))];
     for p in v["probes"].as_array().into_iter().flatten() {
         let sp = &p["spent"];
         let every = p["every_s"].as_f64().unwrap_or(1.0).max(0.001);
@@ -514,12 +508,11 @@ fn cost_boxes(v: &serde_json::Value) {
     for s in v["skipped"].as_array().into_iter().flatten() {
         body.push(format!("{:<12}{}", s.as_str().unwrap_or(""), dim("not on this machine (hosts)")));
     }
-    println!();
-    show("probes, in the daemon", &body, Some("a prompt only reads their last value"));
 
-    // git status, per repository.
-    let mut body = vec![dim(&format!("{:<32}{:>6} {:>10} {:>10} {:>8}", "", "runs", "avg", "max", "last"))];
-    for r in v["repos"].as_array().into_iter().flatten() {
+    body.push(String::new());
+    body.push(dim(&format!("{:<32}{:>6} {:>10} {:>10} {:>8}", "git status", "runs", "avg", "max", "last")));
+    let repos = v["repos"].as_array().cloned().unwrap_or_default();
+    for r in &repos {
         let sp = &r["spent"];
         body.push(format!(
             "{:<32}{:>6} {:>10} {:>10} {:>8}",
@@ -530,19 +523,25 @@ fn cost_boxes(v: &serde_json::Value) {
             format!("{} ago", short(n(&r["checked_s"]))),
         ));
     }
-    if body.len() == 1 {
+    if repos.is_empty() {
         body.push(dim("no repository yet"));
     }
-    println!();
-    show("git status, in the background", &body, None);
-    println!(
-        "{}",
-        dim(&format!(
-            "daemon: up {}, {:.1} MB, {} of CPU ({:.3}% of one core)",
-            short(up),
-            n(&v["rss_kb"]) as f64 / 1024.0,
-            fmt_duration(cpu),
-            cpu as f64 / 10.0 / up as f64
-        ))
-    );
+
+    let up = n(&v["uptime_s"]).max(1);
+    let cpu = n(&v["cpu_ms"]);
+    body.push(String::new());
+    body.push(format!(
+        "{} {:.1} MB · {} of CPU in {} ({:.3}% of one core)",
+        dim("itself"),
+        n(&v["rss_kb"]) as f64 / 1024.0,
+        fmt_duration(cpu),
+        short(up),
+        cpu as f64 / 10.0 / up as f64
+    ));
+    let daemon = boxes::draw("daemon, in the background", &body, Some("a prompt only reads what it found last"));
+
+    let term = crate::util::tty_columns("/dev/tty").unwrap_or(100) as usize;
+    for l in boxes::beside(&prompt, &daemon, term) {
+        println!("{l}");
+    }
 }

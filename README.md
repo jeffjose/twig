@@ -142,25 +142,28 @@ empty line nothing has run, so nothing is waited for.
 that shell until you run it again:
 
 ```
-╭─ twig 2.98 ms ──────────────────────────╮
-│ prep         0.02 ms   0%               │
-│ connect      0.03 ms   0%               │
-│ daemon       2.81 ms  94% █████████▍    │
-│   read       0.02 ms   0%               │
-│   lock       0.00 ms   0%               │
-│   state      0.04 ms   1% ▏             │
-│   git find   0.00 ms   0%               │
-│   git wait   2.70 ms  90% █████████     │
-│   render     0.04 ms   1% ▏             │
-│   escape     0.00 ms   0%               │
-│ wire         0.12 ms   4% ▍             │
-│ git status   2.64 ms  in the background │
-╰─────────────────────────────────────────╯
+╭─ prompt 2.98 ms ───────────────────────────────────────────────────╮
+│ prep         0.02 ms   0%                                          │
+│ connect      0.03 ms   0%                                          │
+│ daemon       2.81 ms  94% █████████▍                               │
+│   read       0.02 ms   0%                                          │
+│   lock       0.00 ms   0%                                          │
+│   state      0.04 ms   1% ▏                                        │
+│   git find   0.00 ms   0%                                          │
+│   git wait   2.70 ms  90% █████████                                │
+│   render     0.04 ms   1% ▏                                        │
+│   escape     0.00 ms   0%                                          │
+│ wire         0.12 ms   4% ▍                                        │
+╰─ daemon: 2.7 ms in the background since the last prompt (1 run) ─╯
 ```
 
-`prep` is twig gathering the directory and environment, `wire` the socket
-and the scheduler, and the steps under `daemon` its own work. Not counted:
-tcsh starting twig, about 0.3 ms.
+The box is only what the prompt waited for. `prep` is twig gathering the
+directory and environment, `wire` the socket and the scheduler, and the
+steps under `daemon` its own work; `git wait` is the one step that waits
+on the background, after a command, for up to `git.wait`. Not counted:
+tcsh starting twig, about 0.3 ms. The bottom edge says what the daemon
+did in the background since the last prompt, for reference: no prompt
+waits for that.
 
 ## Status and info
 
@@ -183,11 +186,13 @@ tcsh starting twig, about 0.3 ms.
 ```
 
 `twig info` is all of it in detail, from everything the daemon has seen
-since it started: what is wrong with the settings; each step of a prompt
-over the last thousand (typical, slow and worst); each probe (how often it
-runs, what a run takes, what that comes to in an hour, and whether the
-prompt shows what it finds); git status per repository; the daemon's
-memory and CPU; and the prompt the settings make, with made-up values.
+since it started: what is wrong with the settings; then two boxes side
+by side, the prompt (what you wait for: each step over the last thousand
+prompts, typical, slow and worst) and the daemon (what it does in the
+background: each probe, how often, what a run takes, what that comes to
+in an hour and whether the prompt shows what it finds; git status per
+repository; its memory and CPU); and the prompt the settings make, with
+made-up values.
 
 ```
 ╭─ probes, in the daemon ────────────────────────────────────────────────────────────╮
