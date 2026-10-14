@@ -55,8 +55,6 @@ struct Shell {
     root: Option<PathBuf>,
     /// Show how long each part of drawing the prompt took (`twig timings`).
     timings: bool,
-    /// State::bg at this shell's last prompt.
-    bg_seen: (u64, u64),
     /// The line above the cursor as last drawn.
     info: Option<String>,
 }
@@ -78,7 +76,6 @@ impl Shell {
             cols: None,
             root: None,
             timings: false,
-            bg_seen: (0, 0),
             info: None,
         }
     }
@@ -185,10 +182,6 @@ struct State {
     started: Instant,
     /// The daemon's steps of the last prompts, for `twig info`.
     prompts: std::collections::VecDeque<Vec<(&'static str, u64)>>,
-    /// All the work done in the background so far (probes, git status,
-    /// fetches): microseconds and runs. A shell's timings show what was
-    /// added since its last prompt.
-    bg: (u64, u64),
 }
 
 struct Shared {
@@ -256,7 +249,6 @@ pub fn run() -> i32 {
         watches: HashMap::new(),
         started: Instant::now(),
         prompts: std::collections::VecDeque::new(),
-        bg: (0, 0),
         host,
     };
     reload(&mut st, true);
@@ -496,12 +488,11 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
         prev = *at;
     }
     steps.push(("total", prev.duration_since(t0).as_micros() as u64));
-    // The background work since this shell's last prompt, for reference.
-    let bg = st.bg;
-    let seen = st.shells.get_mut(&pid).map(|s| std::mem::replace(&mut s.bg_seen, bg)).unwrap_or(bg);
     if st.shells.get(&pid).is_some_and(|s| s.timings) {
         let list: Vec<Value> = steps[..steps.len() - 1].iter().map(|(n, u)| json!([n, u])).collect();
-        let background = json!({ "us": bg.0.saturating_sub(seen.0), "runs": bg.1.saturating_sub(seen.1) });
+        // What the daemon costs, all told, for reference.
+        let (cpu_ms, rss_kb) = own_use();
+        let background = json!({ "cpu_ms": cpu_ms, "rss_kb": rss_kb, "uptime_s": st.started.elapsed().as_secs() });
         reply["timings"] = json!({ "steps": list, "total": steps[steps.len() - 1].1, "background": background });
     }
     if st.prompts.len() >= 1000 {
@@ -578,8 +569,6 @@ fn start_refresh(sh: &S, st: &mut State, root: &Path) {
                 }
             };
             let took = t.elapsed();
-            st.bg.0 += took.as_micros() as u64;
-            st.bg.1 += 1;
             let Some(r) = st.repos.get_mut(&root) else { return };
             r.cost = took;
             r.spent.add(took);
@@ -797,11 +786,8 @@ fn tick_loop(sh: S) {
                     rs.fetching = true;
                     let (repo, sh2, root) = (rs.repo.clone(), sh.clone(), r.clone());
                     thread::spawn(move || {
-                        let t = Instant::now();
                         git::fetch(&repo, Duration::from_secs(120));
                         let mut st = sh2.lock();
-                        st.bg.0 += t.elapsed().as_micros() as u64;
-                        st.bg.1 += 1;
                         if let Some(rs) = st.repos.get_mut(&root) {
                             rs.fetching = false;
                             rs.fetched = Instant::now();
@@ -826,8 +812,6 @@ fn tick_loop(sh: S) {
                 let out = probes::run(&kind, &cfg);
                 let took = t.elapsed();
                 let mut st = sh2.lock();
-                st.bg.0 += took.as_micros() as u64;
-                st.bg.1 += 1;
                 if let Some(slot) = st.slots.iter_mut().find(|s| s.name == name) {
                     slot.spent.add(took);
                     slot.running = false;
@@ -1081,19 +1065,7 @@ fn cost(sh: &S) -> Value {
             json!({ "name": name, "count": v.len(), "p50": pct(v, 0.5), "p95": pct(v, 0.95), "max": v[v.len() - 1] })
         })
         .collect();
-    // The daemon's own use of the machine.
-    let tick = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
-    let cpu_ms = fs::read_to_string("/proc/self/stat")
-        .ok()
-        .and_then(|s| {
-            let f: Vec<u64> = s[s.rfind(')')? + 2..].split_whitespace().skip(11).take(2).filter_map(|x| x.parse().ok()).collect();
-            Some(f.iter().sum::<u64>() * 1000 / tick)
-        })
-        .unwrap_or(0);
-    let rss_kb = fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| s.lines().find(|l| l.starts_with("VmRSS:"))?.split_whitespace().nth(1)?.parse::<u64>().ok())
-        .unwrap_or(0);
+    let (cpu_ms, rss_kb) = own_use();
     json!({
         "uptime_s": st.started.elapsed().as_secs(),
         "cpu_ms": cpu_ms,
@@ -1107,4 +1079,23 @@ fn cost(sh: &S) -> Value {
         "live": st.cfg.raw.live.enabled,
         "skipped": st.cfg.probes.iter().map(|p| p.0.name.clone()).filter(|n| !st.slots.iter().any(|s| s.name == format!("probe:{n}"))).collect::<Vec<_>>(),
     })
+}
+
+/// The daemon's use of the machine: CPU time so far (ms), its own and that
+/// of the commands it ran (git, systemctl, probes); and its memory
+/// (resident, KB).
+fn own_use() -> (u64, u64) {
+    let tick = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
+    let cpu_ms = fs::read_to_string("/proc/self/stat")
+        .ok()
+        .and_then(|s| {
+            let f: Vec<u64> = s[s.rfind(')')? + 2..].split_whitespace().skip(11).take(4).filter_map(|x| x.parse().ok()).collect();
+            Some(f.iter().sum::<u64>() * 1000 / tick)
+        })
+        .unwrap_or(0);
+    let rss_kb = fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| s.lines().find(|l| l.starts_with("VmRSS:"))?.split_whitespace().nth(1)?.parse::<u64>().ok())
+        .unwrap_or(0);
+    (cpu_ms, rss_kb)
 }

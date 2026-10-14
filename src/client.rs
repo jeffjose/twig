@@ -257,15 +257,14 @@ fn timings_box(t: &serde_json::Value, prep: Duration, connect: Duration, total: 
             if name.starts_with(' ') { format!("{}{b}", dim.paint(&line)) } else { format!("{line}{b}") }
         })
         .collect();
-    // The box is what this prompt waited for. The daemon's work in the
-    // background since the last prompt is in the bottom edge, for
-    // reference only: no prompt waited for it.
+    // The box is what this prompt waited for. What the daemon costs, all
+    // told, is in the bottom edge, for reference only: no prompt waits for it.
     let bg = &t["background"];
-    let (bg_us, runs) = (bg["us"].as_u64().unwrap_or(0), bg["runs"].as_u64().unwrap_or(0));
+    let (cpu, up) = (bg["cpu_ms"].as_u64().unwrap_or(0), bg["uptime_s"].as_u64().unwrap_or(0).max(1));
     let foot = format!(
-        "daemon: {:.1} ms in the background since the last prompt ({runs} run{})",
-        bg_us as f64 / 1000.0,
-        if runs == 1 { "" } else { "s" }
+        "daemon: {:.3}% of a core, {:.1} MB",
+        cpu as f64 / 10.0 / up as f64,
+        bg["rss_kb"].as_u64().unwrap_or(0) as f64 / 1024.0
     );
     crate::boxes::draw(&format!("prompt {:.2} ms", total_us as f64 / 1000.0), &body, Some(&foot))
 }
