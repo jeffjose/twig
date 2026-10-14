@@ -40,8 +40,8 @@ prompt starts the daemon itself.
 twig notify backup done                  # for an hour
 twig notify --warn --for 10m deploy is running
 twig notify --error --shows 3 --here look at this    # 3 prompts, this shell only
-twig notices                             # what is showing
 twig ack                                 # dismiss what this shell shows
+twig ack 3                               # dismiss one (ids are in twig status)
 ```
 
 The daemon makes its own: a disk over 90%, a low battery, a failed
@@ -93,8 +93,9 @@ in that order, the last one in its last part. `twig dirs` lists them.
 ## Settings
 
 `~/.config/twig/config.toml`; see [config.toml](config.toml) for all of
-it. Changes take effect at the next prompt. `twig check` says what is
-wrong with the file and shows the prompt it makes.
+it. Changes take effect at the next prompt. `twig info` says what is
+wrong with the file and shows the prompt it makes; `twig info FILE` does
+that for another file, before you put it in place.
 
 ```toml
 [prompt]
@@ -161,17 +162,40 @@ that shell until you run it again:
 and the scheduler, and the steps under `daemon` its own work. Not counted:
 tcsh starting twig, about 0.3 ms.
 
-`twig cost` is the long view, from everything the daemon has seen since
-it started: each step of a prompt over the last thousand (typical, slow
-and worst), each probe (how often it runs, what a run takes, what that
-comes to in an hour, and whether the prompt shows what it finds), git
-status per repository, and the daemon's own memory and CPU.
+## Status and info
+
+`twig status` is how twig is, in one box:
 
 ```
-probes          every    runs        avg        max   per hour   on the prompt
-  ip              10s     361    0.03 ms    0.20 ms      11 ms   {ip} 192.168.3.134
-  battery         30s     120    0.01 ms    0.14 ms       2 ms   {battery} (empty here)
-  units         1m00s      60    5.09 ms    6.08 ms     305 ms   notices only
+╭─ twig  pid 2232929 · systemd · up 3h ───────────────────────────────────────────────╮
+│ settings  ~/.config/twig/config.toml ✔                                              │
+│ live      on                                                                        │
+│ history   4,915 commands                                                            │
+│ shells    2 · pts/18 ~/scripts/twig · pts/4 ~/dotfiles running make test            │
+│ git       ~/scripts/twig main 3 ms, 4s ago · ~/dotfiles master 5 ms, 1m ago         │
+│ notices   1 backup to basalt failed                                                 │
+│ jobs      [4] make test 1m12s                                                       │
+│ facts     fqdn woodwind · ip 192.168.3.134 · load 0.52                              │
+│ probes    7 on time · 395 ms an hour · ip 10s · fqdn 10m · disk 30s · battery 30s   │
+│           load 10s · reboot 5m · units 1m                                           │
+│ prompts   0.11 ms typical · 3.02 ms slow (p95) · 9.80 ms worst · of the last 1000   │
+╰─ twig info for all of it in detail ─────────────────────────────────────────────────╯
+```
+
+`twig info` is all of it in detail, from everything the daemon has seen
+since it started: what is wrong with the settings; each step of a prompt
+over the last thousand (typical, slow and worst); each probe (how often it
+runs, what a run takes, what that comes to in an hour, and whether the
+prompt shows what it finds); git status per repository; the daemon's
+memory and CPU; and the prompt the settings make, with made-up values.
+
+```
+╭─ probes, in the daemon ──────────────────────────────────────────────────────────╮
+│              every   runs        avg        max  per hour   on the prompt        │
+│ ip             10s    361    0.03 ms    0.20 ms     11 ms   {ip} 192.168.3.134   │
+│ battery        30s    120    0.01 ms    0.14 ms      2 ms   {battery} (empty here) │
+│ units           1m     60    5.09 ms    6.08 ms    305 ms   notices only         │
+╰─ a prompt only reads their last value ───────────────────────────────────────────╯
 ```
 
 ## When the daemon is gone or stuck

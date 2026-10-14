@@ -1,5 +1,6 @@
 //! Putting twig on a machine, taking it off, and seeing how it is doing.
 
+use crate::boxes;
 use crate::config::{self, Loaded};
 use crate::git::GitStatus;
 use crate::history;
@@ -121,49 +122,176 @@ pub fn remove() -> i32 {
     0
 }
 
-/// `twig status`
+/// `twig status`: everything the daemon knows, in a box, a row per topic.
 pub fn status() -> i32 {
     let v = match proto::send(&Request::Status, Duration::from_secs(3)) {
         Ok(v) => v,
         Err(_) => {
-            println!("twig is not running (the next prompt starts it, or: twig setup)");
+            println!("twig is not running (the next prompt starts it, or: twig restart)");
             return 1;
         }
     };
+    let color = unsafe { libc::isatty(1) } == 1;
+    let paint = |s: &str, st: &str| if color { Style::of(st).paint(s) } else { s.to_string() };
+    let dim = |s: &str| paint(s, "dim");
     let home = paths::home().to_string_lossy().into_owned();
     let s = |v: &serde_json::Value| v.as_str().unwrap_or("").to_string();
-    println!("daemon     pid {}, up {}", v["pid"], fmt_duration(v["uptime_s"].as_u64().unwrap_or(0) * 1000));
-    println!("settings   {}{}", tilde(&s(&v["config"]), &home), v["config_error"].as_str().map(|e| format!("\n           ✘ {e}")).unwrap_or_default());
-    println!("live       {}", if v["live"].as_bool() == Some(true) { "on" } else { "off" });
-    println!("history    {} commands", v["history"]);
-    println!("notices    {}   jobs running {}", v["notices"], v["jobs_running"]);
-    println!("\nshells");
-    for sh in v["shells"].as_array().into_iter().flatten() {
-        let doing = sh["running"].as_str().map(|c| format!("  running: {c}")).unwrap_or_default();
-        println!("  {:>8}  {:<12} {}{doing}", sh["pid"], s(&sh["tty"]), tilde(&s(&sh["cwd"]), &home));
+    let n = |v: &serde_json::Value| v.as_u64().unwrap_or(0);
+    let list = |v: &serde_json::Value| v.as_array().cloned().unwrap_or_default();
+    // Inside the box: the terminal less the frame.
+    let width = (crate::util::tty_columns("/dev/tty").unwrap_or(100) as usize).saturating_sub(4).max(40);
+    let mut body: Vec<String> = Vec::new();
+    let mut add = |label: &str, items: Vec<String>| body.extend(boxes::row(label, &items, width));
+
+    // The file as it reads now; and what the daemon made of it, if that
+    // differs (a twig older than the settings).
+    let (_, lines) = settings(&paths::config_file());
+    let mut lines = lines.into_iter();
+    add("settings", lines.next().into_iter().collect());
+    for l in lines.take(3) {
+        add("", vec![l]);
     }
-    println!("\nrepositories");
-    for r in v["repos"].as_array().into_iter().flatten() {
-        let how = match r["error"].as_str() {
-            Some(e) => format!("✘ {e}"),
-            None => format!("{}  git status {}ms, {}s ago", s(&r["branch"]), r["cost_ms"], r["checked_s"]),
-        };
-        println!("  {}  {how}", tilde(&s(&r["root"]), &home));
+    if let Some(e) = v["config_error"].as_str() {
+        add("", vec![paint(&format!("✘ the daemon couldn't read them: {}", config::summary(e, None)), "red")]);
     }
-    println!("\nfacts");
-    if let Some(m) = v["facts"].as_object() {
-        let mut keys: Vec<&String> = m.keys().collect();
-        keys.sort();
-        for k in keys {
-            println!("  {k:<10} {}", s(&m[k]));
-        }
+    add("live", vec![(if v["live"].as_bool() == Some(true) { "on" } else { "off" }).into()]);
+    add("history", vec![format!("{} commands", thousands(n(&v["history"])))]);
+
+    let shells = list(&v["shells"]);
+    let mut items = vec![format!("{}", shells.len())];
+    for sh in &shells {
+        let tty = s(&sh["tty"]).trim_start_matches("/dev/").to_string();
+        let tty = if tty.is_empty() { "-".to_string() } else { tty };
+        let doing = sh["running"].as_str().map(|c| paint(&format!(" running {c}"), "cyan")).unwrap_or_default();
+        items.push(format!("{} {}{doing}", dim(&tty), tilde(&s(&sh["cwd"]), &home)));
     }
-    println!("\nprobes");
-    for p in v["probes"].as_array().into_iter().flatten() {
-        let last = p["last_s"].as_u64().map(|l| format!("ran {l}s ago")).unwrap_or_else(|| "not run yet".into());
-        println!("  {:<18} every {:>6}  {last}", s(&p["name"]), fmt_duration(p["every_s"].as_u64().unwrap_or(0) * 1000));
+    add("shells", items);
+
+    let repos = list(&v["repos"]);
+    let items: Vec<String> = if repos.is_empty() {
+        vec![dim("none yet")]
+    } else {
+        repos
+            .iter()
+            .map(|r| {
+                let root = tilde(&s(&r["root"]), &home);
+                match r["error"].as_str() {
+                    Some(e) => format!("{root} {}", paint(&format!("✘ {e}"), "red")),
+                    None => format!(
+                        "{root} {} {}",
+                        paint(&s(&r["branch"]), "magenta"),
+                        dim(&format!("{} ms, {} ago", n(&r["cost_ms"]), short(n(&r["checked_s"]))))
+                    ),
+                }
+            })
+            .collect()
+    };
+    add("git", items);
+
+    let notices = list(&v["notices"]);
+    let items: Vec<String> = if notices.is_empty() {
+        vec![dim("none")]
+    } else {
+        notices
+            .iter()
+            .map(|x| {
+                let st = match x["level"].as_str() {
+                    Some("error") => "red",
+                    Some("warn") => "yellow",
+                    _ => "cyan",
+                };
+                format!("{} {}", dim(&n(&x["id"]).to_string()), paint(&s(&x["text"]), st))
+            })
+            .collect()
+    };
+    add("notices", items);
+
+    let jobs = list(&v["jobs_running"]);
+    let now = now_ms() / 1000;
+    let items: Vec<String> = if jobs.is_empty() {
+        vec![dim("none running")]
+    } else {
+        jobs.iter().map(|j| format!("{} {} {}", dim(&format!("[{}]", n(&j["id"]))), s(&j["cmd"]), dim(&short(now.saturating_sub(n(&j["start"]) / 1000))))).collect()
+    };
+    add("jobs", items);
+
+    let mut facts: Vec<(String, String)> =
+        v["facts"].as_object().map(|m| m.iter().map(|(k, x)| (k.clone(), s(x))).collect()).unwrap_or_default();
+    facts.sort();
+    add("facts", facts.iter().map(|(k, x)| format!("{} {x}", dim(k))).collect());
+
+    // A probe is late when it hasn't run for well over its interval.
+    let probes = list(&v["probes"]);
+    let late: Vec<String> =
+        probes.iter().filter(|p| p["last_s"].as_u64().is_none_or(|l| l > n(&p["every_s"]) * 2 + 5)).map(|p| s(&p["name"])).collect();
+    let mut items = vec![if late.is_empty() {
+        format!("{} {}", probes.len(), dim("on time"))
+    } else {
+        paint(&format!("{} late: {}", late.len(), late.join(", ")), "yellow")
+    }];
+    // What they cost together, from what the daemon has seen.
+    let cost = proto::send(&Request::Cost, Duration::from_secs(3)).ok();
+    if let Some(c) = &cost {
+        let per_hour: f64 = c["probes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| n(&p["spent"]["avg_us"]) as f64 * 3600.0 / p["every_s"].as_f64().unwrap_or(1.0).max(0.001) / 1000.0)
+            .sum();
+        items.push(dim(&format!("{per_hour:.0} ms an hour")));
+    }
+    items.extend(probes.iter().map(|p| format!("{} {}", s(&p["name"]), dim(&short(n(&p["every_s"]))))));
+    add("probes", items);
+
+    // How fast prompts have been, in the daemon.
+    if let Some(total) = cost.as_ref().and_then(|c| c["steps"].as_array().cloned()).and_then(|st| st.into_iter().find(|x| x["name"] == "total")) {
+        let ms = |u: u64| format!("{:.2} ms", u as f64 / 1000.0);
+        add(
+            "prompts",
+            vec![
+                format!("{} {}", ms(n(&total["p50"])), dim("typical")),
+                format!("{} {}", ms(n(&total["p95"])), dim("slow (p95)")),
+                format!("{} {}", ms(n(&total["max"])), dim("worst")),
+                dim(&format!("of the last {}", n(&total["count"]))),
+            ],
+        );
+    }
+
+    let by = match crate::client::daemon_pid() {
+        Some((_, true)) => "systemd",
+        Some((_, false)) => "started by a shell",
+        None => "?",
+    };
+    let title = format!("twig  pid {} · {by} · up {}", v["pid"], short(n(&v["uptime_s"])));
+    for l in boxes::draw(&title, &body, Some("twig info for all of it in detail")) {
+        println!("{l}");
     }
     0
+}
+
+/// Seconds as the largest unit or two: 45s, 10m, 1h05m, 3d.
+fn short(secs: u64) -> String {
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 if secs.is_multiple_of(60) => format!("{}m", secs / 60),
+        60..=3599 => format!("{}m{:02}s", secs / 60, secs % 60),
+        3600..=86_399 if secs.is_multiple_of(3600) => format!("{}h", secs / 3600),
+        3600..=86_399 => format!("{}h{:02}m", secs / 3600, secs % 3600 / 60),
+        _ => format!("{}d", secs / 86_400),
+    }
+}
+
+/// 4915 as 4,915.
+fn thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 const KNOWN: &[&str] = &[
@@ -172,39 +300,66 @@ const KNOWN: &[&str] = &[
     "git_conflicts", "git_clean", "git_dirty", "git_state", "git_remote", "git_age", "pwd",
 ];
 
-/// `twig check [FILE]`: read the settings, say what is wrong, and show the
-/// prompt they make with made-up values.
-pub fn check(args: &[String]) -> i32 {
-    let path = args.first().map(PathBuf::from).unwrap_or_else(paths::config_file);
-    let cfg: Loaded = match config::read(&path) {
+/// The settings file: whether it reads, and anything in it that can't work
+/// (a variable no template has). The settings when they read, and what to
+/// say, a line each, first the file and how it is.
+fn settings(path: &std::path::Path) -> (Option<Loaded>, Vec<String>) {
+    let home = paths::home().to_string_lossy().into_owned();
+    let shown = tilde(&path.to_string_lossy(), &home);
+    let red = |s: &str| Style::of("red").paint(s);
+    let dim = |s: &str| Style::of("dim").paint(s);
+    let cfg = match config::read(path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("✘ {}\n  {}", path.display(), e.replace('\n', "\n  "));
-            if fs::read_to_string(&path).is_ok_and(|t| config::looks_old(&t)) {
-                eprintln!(
-                    "\nThis is the settings file of the old twig, before the rewrite. Move it aside\n\
-                     and run `twig setup` for a new one (or link your own, as ~/dotfiles/setup does)."
-                );
+            let text = fs::read_to_string(path).ok();
+            let mut lines = vec![format!("{shown} {}", red(&format!("✘ {}", config::summary(&e, text.as_deref()))))];
+            if text.as_deref().is_some_and(config::looks_old) {
+                lines.push(dim("move it aside and run twig setup for new settings, or link your own"));
+            } else {
+                lines.extend(e.lines().filter(|l| !l.trim().is_empty()).map(|l| dim(&format!("  {l}"))));
             }
-            return 1;
+            return (None, lines);
         }
     };
-    let mut problems = 0;
+    let mut problems = Vec::new();
     let probes: Vec<&str> = cfg.probes.iter().map(|p| p.0.name.as_str()).collect();
     for (name, nodes) in [("format", Some(&cfg.format)), ("narrow", cfg.narrow.as_ref()), ("right", Some(&cfg.right))] {
         let mut vars = Vec::new();
         template::variables(nodes.map(|n| n.as_slice()).unwrap_or(&[]), &mut vars);
         for v in vars {
             if !v.starts_with('$') && !KNOWN.contains(&v.as_str()) && !probes.contains(&v.as_str()) {
-                println!("✘ prompt.{name}: no variable {{{v}}} (and no [[probe]] named {v})");
-                problems += 1;
+                problems.push(red(&format!("✘ prompt.{name}: no variable {{{v}}}, and no [[probe]] named {v}")));
             }
         }
     }
-    if problems == 0 {
-        println!("✔ {}", path.display());
-    }
+    let first = if problems.is_empty() { format!("{shown} {}", Style::of("green").paint("✔")) } else { shown };
+    (Some(cfg), std::iter::once(first).chain(problems).collect())
+}
 
+/// `twig info [FILE]` (also check, cost, debug): the settings and what is
+/// wrong with them, what each part of twig costs, and the prompt the
+/// settings make, with made-up values.
+pub fn info(args: &[String]) -> i32 {
+    let path = args.first().map(PathBuf::from).unwrap_or_else(paths::config_file);
+    let (cfg, lines) = settings(&path);
+    let ok = cfg.is_some() && lines.len() == 1;
+    for l in boxes::draw("settings", &lines, None) {
+        println!("{l}");
+    }
+    match proto::send(&Request::Cost, Duration::from_secs(3)) {
+        Ok(v) => cost_boxes(&v),
+        Err(_) => println!("{}", Style::of("dim").paint("\nthe daemon is not running (twig restart): no costs to show")),
+    }
+    if let Some(cfg) = cfg {
+        preview(&cfg);
+    }
+    if ok { 0 } else { 1 }
+}
+
+/// The prompt the settings make, with made-up values, in boxes: at the
+/// terminal's width, and narrow after a failed command.
+fn preview(cfg: &Loaded) {
+    let probes: Vec<&str> = cfg.probes.iter().map(|p| p.0.name.as_str()).collect();
     let env: HashMap<String, String> = env::vars().collect();
     let host = paths::hostname();
     // Made-up values, marked as such where they can't be real.
@@ -226,7 +381,7 @@ pub fn check(args: &[String]) -> i32 {
     };
     let cwd = env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
     let ctx = |status, notice: Option<(String, Level, usize)>| Ctx {
-        cfg: &cfg,
+        cfg,
         host: &host,
         fqdn: &host,
         cwd: &cwd,
@@ -241,7 +396,6 @@ pub fn check(args: &[String]) -> i32 {
         jobs: "⏵ make test 1m12s".into(),
     };
     let term = crate::util::tty_columns("/dev/tty").unwrap_or(100) as usize;
-    let dim = Style::of("dim");
     // Each sample in a box as wide as it says, so it can't be mistaken for
     // the real prompt around it.
     let boxed = |title: &str, c: &Ctx, cols: usize| {
@@ -251,18 +405,14 @@ pub fn check(args: &[String]) -> i32 {
             let last = lines.len() - 1;
             lines[last] = format!("{}{}{r}", lines[last], " ".repeat(cols.saturating_sub(visible_width(&lines[last]) + visible_width(&r) + 1)));
         }
-        let inner = lines.iter().map(|l| visible_width(l)).max().unwrap_or(0).max(visible_width(title) + 3);
-        let head = format!("─ {title} ");
-        println!("\n{}", dim.paint(&format!("╭{head}{}╮", "─".repeat(inner + 2 - visible_width(&head).min(inner + 2)))));
-        for l in &lines {
-            println!("{} {l}\x1b[0m{} {}", dim.paint("│"), " ".repeat(inner - visible_width(l)), dim.paint("│"));
+        println!();
+        for l in boxes::draw(title, &lines, None) {
+            println!("{l}");
         }
-        println!("{}", dim.paint(&format!("╰{}╯", "─".repeat(inner + 2))));
     };
     let wide = term.saturating_sub(4).max(40);
     boxed(&format!("sample, made-up values, {wide} columns"), &ctx(0, Some(("disk / 93% full, 12G left".into(), Level::Warn, 1))), wide);
     boxed("after a failed command, 60 columns", &ctx(2, None), 60);
-    if problems > 0 { 1 } else { 0 }
 }
 
 /// `twig restart`: the service when systemd runs it here, otherwise the
@@ -299,89 +449,100 @@ pub fn restart() -> i32 {
     1
 }
 
-/// `twig cost` (or `twig debug`): what each part of twig costs.
-pub fn cost() -> i32 {
-    let v = match proto::send(&Request::Cost, Duration::from_secs(3)) {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!("twig: the daemon is not running (twig restart)");
-            return 1;
-        }
-    };
+/// What each part of twig costs, from the daemon's answer to Cost, in a box
+/// for each: prompts, probes, git; then the daemon's own use.
+fn cost_boxes(v: &serde_json::Value) {
+    println!();
     let color = unsafe { libc::isatty(1) } == 1;
     let paint = |s: &str, st: &str| if color { Style::of(st).paint(s) } else { s.to_string() };
+    let dim = |s: &str| paint(s, "dim");
     let ms = |us: u64| format!("{:.2} ms", us as f64 / 1000.0);
     let n = |x: &serde_json::Value| x.as_u64().unwrap_or(0);
     let home = paths::home().to_string_lossy().into_owned();
+    let show = |title: &str, body: &[String], foot: Option<&str>| {
+        for l in boxes::draw(title, body, foot) {
+            println!("{l}");
+        }
+    };
 
-    let up = n(&v["uptime_s"]).max(1);
-    let cpu = n(&v["cpu_ms"]);
-    println!(
-        "{}  up {}, {:.1} MB, {} of CPU ({:.3}% of one core)",
-        paint("daemon", "bold"),
-        fmt_duration(up * 1000),
-        n(&v["rss_kb"]) as f64 / 1024.0,
-        fmt_duration(cpu),
-        cpu as f64 / 10.0 / up as f64
-    );
-
-    println!("\n{}{}", paint(&format!("{:<34}", format!("prompts, in the daemon (last {})", v["prompts"])), "bold"), paint("     p50        p95        max", "dim"));
+    // Prompts: each step, typical, slow and worst.
+    let mut body = vec![dim(&format!("{:<12}{:>10} {:>10} {:>10}", "", "p50", "p95", "max"))];
     for s in v["steps"].as_array().into_iter().flatten() {
         let name = s["name"].as_str().unwrap_or("");
-        let line = format!("  {:<32}{:>10} {:>10} {:>10}", name, ms(n(&s["p50"])), ms(n(&s["p95"])), ms(n(&s["max"])));
-        println!("{}", if name == "total" { paint(&line, "bold") } else { line });
+        let cells = format!("{:>10} {:>10} {:>10}", ms(n(&s["p50"])), ms(n(&s["p95"])), ms(n(&s["max"])));
+        body.push(if name == "total" { paint(&format!("{name:<12}{cells}"), "bold") } else { format!("{}{cells}", dim(&format!("{name:<12}"))) });
     }
-    println!("{}", paint(&format!("  git waits up to {} ms after a command; twig timings shows a prompt's\n  whole time, with twig starting and the socket (about 0.3 ms more)", v["git_wait_ms"]), "dim"));
-
-    println!(
-        "\n{}{}",
-        paint(&format!("{:<14}", "probes"), "bold"),
-        paint("  every    runs        avg        max   per hour   on the prompt", "dim")
+    let up = n(&v["uptime_s"]).max(1);
+    let cpu = n(&v["cpu_ms"]);
+    show(
+        &format!("prompts, in the daemon · last {}", n(&v["prompts"])),
+        &body,
+        Some(&format!("git waits up to {} ms after a command", n(&v["git_wait_ms"]))),
     );
+
+    // Probes: how often, what a run takes, what that is per hour, and
+    // whether the prompt shows what they find.
     let used: Vec<&str> = v["used"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).collect();
+    let mut body = vec![dim(&format!("{:<12}{:>6} {:>6} {:>10} {:>10} {:>9}   {}", "", "every", "runs", "avg", "max", "per hour", "on the prompt"))];
     for p in v["probes"].as_array().into_iter().flatten() {
         let sp = &p["spent"];
         let every = p["every_s"].as_f64().unwrap_or(1.0).max(0.001);
         let per_hour = n(&sp["avg_us"]) as f64 * 3600.0 / every / 1000.0;
         let vars: Vec<&str> = p["vars"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).collect();
-        let shown = vars.iter().filter(|v| used.contains(v)).map(|v| format!("{{{v}}}")).collect::<Vec<_>>();
+        let shown: Vec<String> = vars.iter().filter(|v| used.contains(v)).map(|v| format!("{{{v}}}")).collect();
         let value = p["value"].as_str().unwrap_or("");
         let where_ = if !shown.is_empty() {
-            format!("{} {}", shown.join(" "), paint(if value.is_empty() { "(empty here)" } else { value }, "dim"))
+            format!("{} {}", shown.join(" "), dim(if value.is_empty() { "(empty here)" } else { value }))
         } else if vars.contains(&"fqdn") {
-            paint("the full host name, for the colors in [hosts]", "dim")
+            dim("for the colors in [hosts]")
         } else if !vars.is_empty() {
-            paint(&format!("{{{}}} not in the template{}", vars.join("} {"), if p["notices"].as_bool() == Some(true) { "; notices" } else { "" }), "dim")
+            dim(&format!("{{{}}} not shown{}", vars.join("} {"), if p["notices"].as_bool() == Some(true) { "; notices" } else { "" }))
         } else {
-            paint("notices only", "dim")
+            dim("notices only")
         };
         let name = p["name"].as_str().unwrap_or("").trim_start_matches("probe:");
-        println!(
-            "  {:<12}{:>7} {:>7} {:>10} {:>10} {:>10}   {where_}",
-            name,
-            fmt_duration((every * 1000.0) as u64),
+        let hot = if per_hour >= 100.0 { "yellow" } else { "none" };
+        body.push(format!(
+            "{name:<12}{:>6} {:>6} {:>10} {:>10} {}   {where_}",
+            short(every as u64),
             n(&sp["runs"]),
             ms(n(&sp["avg_us"])),
             ms(n(&sp["max_us"])),
-            format!("{per_hour:.0} ms"),
-        );
+            paint(&format!("{:>9}", format!("{per_hour:.0} ms")), hot),
+        ));
     }
     for s in v["skipped"].as_array().into_iter().flatten() {
-        println!("  {:<12}{}", s.as_str().unwrap_or(""), paint("not on this machine (hosts)", "dim"));
+        body.push(format!("{:<12}{}", s.as_str().unwrap_or(""), dim("not on this machine (hosts)")));
     }
-    println!("{}", paint("  probes run in the daemon, away from the prompt; a prompt only reads their last value", "dim"));
+    println!();
+    show("probes, in the daemon", &body, Some("a prompt only reads their last value"));
 
-    println!("\n{}{}", paint(&format!("{:<34}", "git status, in the background"), "bold"), paint("runs        avg        max   last", "dim"));
+    // git status, per repository.
+    let mut body = vec![dim(&format!("{:<32}{:>6} {:>10} {:>10} {:>8}", "", "runs", "avg", "max", "last"))];
     for r in v["repos"].as_array().into_iter().flatten() {
         let sp = &r["spent"];
-        println!(
-            "  {:<32}{:>4} {:>10} {:>10}   {}s ago",
+        body.push(format!(
+            "{:<32}{:>6} {:>10} {:>10} {:>8}",
             tilde(r["root"].as_str().unwrap_or(""), &home),
             n(&sp["runs"]),
             ms(n(&sp["avg_us"])),
             ms(n(&sp["max_us"])),
-            r["checked_s"]
-        );
+            format!("{} ago", short(n(&r["checked_s"]))),
+        ));
     }
-    0
+    if body.len() == 1 {
+        body.push(dim("no repository yet"));
+    }
+    println!();
+    show("git status, in the background", &body, None);
+    println!(
+        "{}",
+        dim(&format!(
+            "daemon: up {}, {:.1} MB, {} of CPU ({:.3}% of one core)",
+            short(up),
+            n(&v["rss_kb"]) as f64 / 1024.0,
+            fmt_duration(cpu),
+            cpu as f64 / 10.0 / up as f64
+        ))
+    );
 }

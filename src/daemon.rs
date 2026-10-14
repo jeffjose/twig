@@ -138,7 +138,7 @@ struct Slot {
     spent: Spent,
 }
 
-/// What something has cost so far, for `twig cost`.
+/// What something has cost so far, for `twig info`.
 #[derive(Clone, Copy, Default)]
 struct Spent {
     runs: u64,
@@ -180,7 +180,7 @@ struct State {
     inotify: i32,
     watches: HashMap<i32, PathBuf>,
     started: Instant,
-    /// The daemon's steps of the last prompts, for `twig cost`.
+    /// The daemon's steps of the last prompts, for `twig info`.
     prompts: std::collections::VecDeque<Vec<(&'static str, u64)>>,
 }
 
@@ -474,7 +474,7 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
     let (p, right) = (tcsh::escape(&p), tcsh::escape(&right));
     marks.push(("escape", Instant::now()));
     let mut reply = json!({ "prompt": p, "right": right });
-    // Microseconds per step, in order, kept for `twig cost`. A step that
+    // Microseconds per step, in order, kept for `twig info`. A step that
     // didn't happen (no repository) is not there.
     let mut steps: Vec<(&'static str, u64)> = Vec::new();
     let mut prev = t0;
@@ -714,7 +714,7 @@ fn reload(st: &mut State, force: bool) -> bool {
             st.cfg_error = Some(e);
             st.notices.put(New {
                 key: Some("config".into()),
-                text: format!("twig settings not read: {what} (twig check)"),
+                text: format!("twig settings not read: {what} (twig info)"),
                 level: Level::Error,
                 ttl_ms: None,
                 shows: None,
@@ -988,8 +988,8 @@ fn status(sh: &S) -> Value {
         "shells": shells,
         "repos": repos,
         "facts": st.facts,
-        "notices": st.notices.list.len(),
-        "jobs_running": st.jobs.values().filter(|j| j.end.is_none()).count(),
+        "notices": st.notices.list.iter().map(|n| json!({ "id": n.id, "text": n.text, "level": n.level })).collect::<Vec<_>>(),
+        "jobs_running": st.jobs.values().filter(|j| j.end.is_none()).map(|j| json!({ "id": j.id, "cmd": j.cmd, "start": j.start })).collect::<Vec<_>>(),
         "history": st.history.len(),
         "probes": probes,
         "live": st.cfg.raw.live.enabled,
@@ -1012,7 +1012,7 @@ fn sd_notify(msg: &str) {
     }
 }
 
-/// `twig cost`: what each part of twig costs, from what the daemon has seen.
+/// What each part of twig costs, from what the daemon has seen (`twig info`).
 fn cost(sh: &S) -> Value {
     let st = sh.lock();
     let mut used = Vec::new();

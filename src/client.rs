@@ -260,15 +260,7 @@ fn timings_box(t: &serde_json::Value, prep: Duration, connect: Duration, total: 
     if let Some(g) = t["git_status"].as_u64() {
         body.push(dim.paint(&format!("{:<11}{}  in the background", "git status", ms(g))));
     }
-    let width = body.iter().map(|l| crate::util::visible_width(l)).max().unwrap_or(0);
-    let title = format!("─ twig {:.2} ms ", total_us as f64 / 1000.0);
-    let mut out = vec![dim.paint(&format!("╭{title}{}╮", "─".repeat((width + 2).saturating_sub(crate::util::visible_width(&title)))))];
-    for l in body {
-        let pad = " ".repeat(width - crate::util::visible_width(&l));
-        out.push(format!("{} {l}{pad} {}", dim.paint("│"), dim.paint("│")));
-    }
-    out.push(dim.paint(&format!("╰{}╯", "─".repeat(width + 2))));
-    out
+    crate::boxes::draw(&format!("twig {:.2} ms", total_us as f64 / 1000.0), &body, None)
 }
 
 /// `twig timings`: show, above each prompt of this shell, how long drawing

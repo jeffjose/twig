@@ -4,7 +4,7 @@
 
 use crate::client;
 use crate::proto::Request;
-use crate::util::{fmt_ago, now_ms, parse_duration};
+use crate::util::{now_ms, parse_duration};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -239,53 +239,13 @@ fn usage_err(msg: &str) -> i32 {
     2
 }
 
-/// `twig notices`
-pub fn list_cmd(_args: &[String]) -> i32 {
-    let v = match client::ask(&Request::Notices) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("twig: {e}");
-            return 1;
-        }
-    };
-    let now = now_ms();
-    let list = v["notices"].as_array().cloned().unwrap_or_default();
-    if list.is_empty() {
-        println!("no notices");
-    }
-    for n in list {
-        let mut how = Vec::new();
-        if let Some(e) = n["expires"].as_u64() {
-            how.push(format!("for {}", fmt_ago(now, e)));
-        }
-        if let Some(s) = n["shows"].as_u64() {
-            how.push(format!("{s} prompts"));
-        }
-        if n["pid"].is_u64() {
-            how.push(format!("shell {}", n["pid"]));
-        }
-        if n["key"].is_string() && n["expires"].is_null() && n["shows"].is_null() {
-            how.push("until it clears".into());
-        }
-        println!(
-            "{:>4}  {:<5}  {:<5}  {}  ({})",
-            n["id"].as_u64().unwrap_or(0),
-            n["level"].as_str().unwrap_or(""),
-            fmt_ago(n["created"].as_u64().unwrap_or(now), now),
-            n["text"].as_str().unwrap_or(""),
-            how.join(", ")
-        );
-    }
-    0
-}
-
 /// `twig ack [ID]`: dismiss one notice, or all that this shell shows.
 pub fn ack_cmd(args: &[String]) -> i32 {
     let id = match args.first() {
         Some(a) => match a.parse() {
             Ok(i) => Some(i),
             Err(_) => {
-                eprintln!("usage: twig ack [ID]   (ids are in `twig notices`)");
+                eprintln!("usage: twig ack [ID]   (ids are in `twig status`)");
                 return 2;
             }
         },

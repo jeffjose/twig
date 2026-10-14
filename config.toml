@@ -1,6 +1,6 @@
 # twig settings. Saved changes take effect at the next prompt; if the file
 # has a mistake, the last good settings stay and the prompt says so.
-# `twig check` reads this file and shows what the prompt would look like.
+# `twig info` reads this file, says what is wrong, and shows the prompt it makes.
 
 [prompt]
 # {name} is a variable, {name:style} gives it a style, {"text":style} is

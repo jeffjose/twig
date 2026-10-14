@@ -1,3 +1,4 @@
+mod boxes;
 mod client;
 mod config;
 mod daemon;
@@ -19,18 +20,19 @@ mod util;
 const HELP: &str = "\
 twig: a fast tcsh prompt, with a daemon that keeps it up to date.
 
-  twig setup            put twig on this machine: settings, history, the service
-  twig status           what the daemon knows: shells, repositories, probes
-  twig check [FILE]     read the settings, say what is wrong, show the prompt
-  twig remove           take the service off this machine
+  twig status           how it is: daemon, settings, shells, git, notices, jobs
+  twig info [FILE]      all of it in detail: what is wrong with the settings,
+                          what each part costs, the prompt the settings make
   twig timings          how long each prompt takes, above it; again to stop
-  twig cost             what each part costs: prompts, probes, git, the daemon
+
+  twig setup            put twig on this machine: settings, history, the service
+  twig restart          the daemon, with or without systemd
+  twig remove           take the service off this machine
 
 Notices: messages on the prompt that go away by themselves.
 
   twig notify [--warn|--error] [--for 10m] [--shows N] [--here] TEXT
-  twig notices          the ones showing now
-  twig ack [ID]         dismiss one, or all those in this shell
+  twig ack [ID]         dismiss one (ids are in twig status), or all in this shell
 
 Jobs: commands that run in the background and report on the prompt.
 
@@ -51,8 +53,6 @@ What the shell runs (set up by twig init tcsh):
   twig init tcsh        the aliases for ~/.cshrc
   twig prompt PID STATUS, twig hook PID COMMAND, twig pick PID
   twig daemon           the daemon itself, in the foreground
-  twig restart          the daemon, with or without systemd
-  twig reload, twig stop
 ";
 
 fn main() {
@@ -74,18 +74,17 @@ fn main() {
         "log" => jobs::log(&rest),
         "kill" => jobs::kill(&rest),
         "notify" => notices::notify_cmd(&rest),
-        "notices" => notices::list_cmd(&rest),
         "ack" => notices::ack_cmd(&rest),
         "history" | "h" => history::cmd(&rest),
         "pick" => pick::run(&rest),
         "z" => dirs::z_cmd(&rest),
         "dirs" => dirs::list_cmd(&rest),
-        "status" => setup::status(),
-        "check" => setup::check(&rest),
+        // The older names lead to the two reports.
+        "status" | "notices" => setup::status(),
+        "info" | "check" | "cost" | "debug" => setup::info(&rest),
+        "timings" => client::timings(),
         "setup" => setup::setup(),
         "remove" => setup::remove(),
-        "timings" => client::timings(),
-        "cost" | "debug" => setup::cost(),
         "restart" => setup::restart(),
         "reload" | "stop" => client::simple(&cmd),
         "" | "help" | "-h" | "--help" => {
