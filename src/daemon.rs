@@ -226,6 +226,13 @@ pub fn run() -> i32 {
     reload(&mut st, true);
     let sh: S = Arc::new(Shared { st: Mutex::new(st), cv: Condvar::new() });
     eprintln!("twig: daemon {} listening on {}", std::process::id(), sock.display());
+    // Shells read this to know whose daemon it is: one that systemd runs is
+    // restarted by its watchdog, one that a shell started by the shells.
+    let by = if std::env::var_os("NOTIFY_SOCKET").is_some() { "systemd" } else { "shell" };
+    let _ = fs::write(rt.join("pid"), format!("{} {by}\n", std::process::id()));
+    // A new daemon: shells that gave up on the last one can come back.
+    let _ = fs::remove_file(rt.join("unanswered"));
+    sd_notify("READY=1");
 
     let s2 = sh.clone();
     thread::spawn(move || tick_loop(s2));
@@ -514,6 +521,17 @@ fn start_refresh(sh: &S, st: &mut State, root: &Path) {
                 last = Some(s.clone());
             }
             let mut st = sh.lock();
+            let key = format!("git:{}", root.display());
+            // A failure is said on the prompt, so stale numbers aren't taken
+            // for fresh ones.
+            changed |= match &res {
+                Ok(_) => st.notices.clear(&key),
+                Err(e) => {
+                    let home = paths::home().to_string_lossy().into_owned();
+                    let text = format!("{e} in {}", crate::util::tilde(&root.to_string_lossy(), &home));
+                    st.notices.put(New { key: Some(key), text, level: Level::Warn, ttl_ms: None, shows: None, pid: None })
+                }
+            };
             let Some(r) = st.repos.get_mut(&root) else { return };
             r.cost = t.elapsed();
             r.checked = Instant::now();
@@ -676,6 +694,9 @@ fn tick_loop(sh: S) {
         let mut redraw_all = false;
         let now = now_ms();
         let mut st = sh.lock();
+        // Alive: the state can be locked. A daemon that stops saying so (stuck,
+        // or stopped) is restarted by systemd (WatchdogSec in the unit).
+        sd_notify("WATCHDOG=1");
         redraw_all |= reload(&mut st, false);
         redraw_all |= st.notices.expire(now);
 
@@ -933,4 +954,20 @@ fn status(sh: &S) -> Value {
         "probes": probes,
         "live": st.cfg.raw.live.enabled,
     })
+}
+
+/// Tell systemd something (READY=1, WATCHDOG=1), when it runs the daemon.
+fn sd_notify(msg: &str) {
+    use std::os::unix::net::{SocketAddr, UnixDatagram};
+    let Some(path) = std::env::var_os("NOTIFY_SOCKET") else { return };
+    let Ok(sock) = UnixDatagram::unbound() else { return };
+    let path = path.to_string_lossy();
+    if let Some(name) = path.strip_prefix('@') {
+        use std::os::linux::net::SocketAddrExt;
+        if let Ok(addr) = SocketAddr::from_abstract_name(name.as_bytes()) {
+            let _ = sock.send_to_addr(msg.as_bytes(), &addr);
+        }
+    } else {
+        let _ = sock.send_to(msg.as_bytes(), &*path);
+    }
 }

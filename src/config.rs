@@ -367,7 +367,8 @@ pub fn load(raw: Config) -> Result<Loaded, String> {
         symbol_style: style("prompt.symbol_style", &p.symbol_style)?,
         symbol_error_style: style("prompt.symbol_error_style", &p.symbol_error_style)?,
         duration_min: dur("prompt.duration_min", &p.duration_min)?.map_or(0, |d| d.as_millis() as u64),
-        git_wait: dur("git.wait", &raw.git.wait)?.unwrap_or_default(),
+        // Under the 400 ms a shell gives the daemon to answer at all.
+        git_wait: dur("git.wait", &raw.git.wait)?.unwrap_or_default().min(Duration::from_millis(250)),
         git_fetch: dur("git.fetch", &raw.git.fetch)?,
         git_poll: dur("git.poll", &raw.git.poll)?,
         disk_every: dur("disk.every", &raw.disk.every)?.unwrap_or(Duration::from_secs(30)),

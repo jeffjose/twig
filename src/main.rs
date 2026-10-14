@@ -50,6 +50,7 @@ What the shell runs (set up by twig init tcsh):
   twig init tcsh        the aliases for ~/.cshrc
   twig prompt PID STATUS, twig hook PID COMMAND, twig pick PID
   twig daemon           the daemon itself, in the foreground
+  twig restart          the daemon, with or without systemd
   twig reload, twig stop
 ";
 
@@ -83,6 +84,7 @@ fn main() {
         "setup" => setup::setup(),
         "remove" => setup::remove(),
         "timings" => client::timings(),
+        "restart" => setup::restart(),
         "reload" | "stop" => client::simple(&cmd),
         "" | "help" | "-h" | "--help" => {
             print!("{HELP}");

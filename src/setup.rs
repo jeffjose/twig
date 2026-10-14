@@ -75,9 +75,12 @@ pub fn setup() -> i32 {
     std::thread::sleep(Duration::from_millis(100));
     if has_user_systemd() {
         let path = env::var("PATH").unwrap_or_default();
+        // The daemon checks in every second; one that misses 10 seconds of
+        // it (stuck, or stopped) is restarted.
         let unit = format!(
-            "[Unit]\nDescription=twig: the daemon behind the tcsh prompt\n\n[Service]\nExecStart={} daemon\n\
-             Environment=PATH={path}\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
+            "[Unit]\nDescription=twig: the daemon behind the tcsh prompt\n\n[Service]\nType=notify\nNotifyAccess=main\n\
+             ExecStart={} daemon\nEnvironment=PATH={path}\nWatchdogSec=10\nRestart=on-failure\nRestartSec=2\n\n\
+             [Install]\nWantedBy=default.target\n",
             exe.display()
         );
         let f = unit_file();
@@ -264,4 +267,38 @@ pub fn check(args: &[String]) -> i32 {
     boxed(&format!("sample, made-up values, {wide} columns"), &ctx(0, Some(("disk / 93% full, 12G left".into(), Level::Warn, 1))), wide);
     boxed("after a failed command, 60 columns", &ctx(2, None), 60);
     if problems > 0 { 1 } else { 0 }
+}
+
+/// `twig restart`: the service when systemd runs it here, otherwise the
+/// daemon a shell started. Either way the daemon is then the twig on disk.
+pub fn restart() -> i32 {
+    let by_systemd = crate::client::daemon_pid().is_some_and(|(_, s)| s) || (unit_file().exists() && has_user_systemd());
+    if by_systemd {
+        // A daemon a shell started meanwhile would keep the service's from starting.
+        if crate::client::daemon_pid().is_some_and(|(_, s)| !s) {
+            let _ = proto::send(&Request::Stop, Duration::from_secs(2));
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+    if by_systemd && systemctl(&["restart", "twig.service"]) {
+        println!("restarted the service");
+        return 0;
+    }
+    // Ask it to stop; if it doesn't answer, stop it.
+    if proto::send(&Request::Stop, Duration::from_secs(2)).is_err() {
+        if let Some((pid, _)) = crate::client::daemon_pid() {
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        }
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    crate::client::start_daemon();
+    for _ in 0..50 {
+        std::thread::sleep(Duration::from_millis(40));
+        if let Ok(v) = proto::send(&Request::Status, Duration::from_secs(1)) {
+            println!("restarted the daemon (pid {})", v["pid"]);
+            return 0;
+        }
+    }
+    eprintln!("twig: the daemon didn't start; see {}", paths::state_dir().join("daemon.log").display());
+    1
 }

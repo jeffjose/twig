@@ -36,6 +36,45 @@ pub fn start_daemon() {
     let _ = spawn_detached(Command::new(exe).arg("daemon"), Some(&log));
 }
 
+/// How long shells leave a daemon alone after it failed to answer a prompt
+/// in time, drawing their prompts themselves meanwhile.
+const BACK_OFF: Duration = Duration::from_secs(15);
+
+/// The file that says the daemon didn't answer, shared by every shell. It
+/// holds how many times in a row that has happened.
+fn unanswered() -> std::path::PathBuf {
+    paths::runtime_dir().join("unanswered")
+}
+
+/// Whether to leave the daemon alone for now.
+fn backing_off() -> bool {
+    std::fs::metadata(unanswered()).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|e| e < BACK_OFF))
+}
+
+/// The daemon took too long. The second time in a row (after a back-off),
+/// one that a shell started is stopped and started again; one that systemd
+/// runs is restarted by its watchdog instead.
+fn not_answered() {
+    let count = std::fs::read_to_string(unanswered()).ok().and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0) + 1;
+    let _ = std::fs::write(unanswered(), count.to_string());
+    if count >= 2 {
+        if let Some((pid, false)) = daemon_pid() {
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            start_daemon();
+            let _ = std::fs::remove_file(unanswered());
+        }
+    }
+}
+
+/// The daemon's process, and whether systemd runs it (from the file it
+/// writes when it starts).
+pub fn daemon_pid() -> Option<(u32, bool)> {
+    let text = std::fs::read_to_string(paths::runtime_dir().join("pid")).ok()?;
+    let mut w = text.split_whitespace();
+    let pid: u32 = w.next()?.parse().ok()?;
+    crate::util::alive(pid).then_some((pid, w.next() == Some("systemd")))
+}
+
 /// Ask the daemon, starting it if it isn't running.
 pub fn ask(req: &Request) -> Result<serde_json::Value, String> {
     match proto::send(req, Duration::from_secs(5)) {
@@ -76,8 +115,13 @@ pub fn prompt(args: &[String]) -> i32 {
     let env: Vec<(String, String)> = env::vars().collect();
     let req = Request::Prompt { pid, status, cwd: cwd.clone(), env };
     let prep = start.elapsed();
+    if backing_off() {
+        let (p, r) = local_prompt(&cwd, status, "twig daemon not answering; restarting it (twig status)");
+        return print_prompt(&p, &r);
+    }
     let (p, r) = match proto::send_timed(&req, PROMPT_LIMIT) {
         Ok((v, connect)) if v["prompt"].is_string() => {
+            let _ = std::fs::remove_file(unanswered());
             let mut p = v["prompt"].as_str().unwrap_or("").to_string();
             if v["timings"].is_object() {
                 let total = start.elapsed();
@@ -88,26 +132,35 @@ pub fn prompt(args: &[String]) -> i32 {
             }
             (p, v["right"].as_str().unwrap_or("").to_string())
         }
-        other => {
-            if let Err(e) = &other {
-                if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) {
-                    start_daemon();
-                }
-            }
-            local_prompt(&cwd, status)
+        Ok((v, _)) => {
+            let why = format!("twig daemon: {}", v["error"].as_str().unwrap_or("no prompt in its answer"));
+            local_prompt(&cwd, status, &why)
         }
+        Err(e) if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => {
+            start_daemon();
+            local_prompt(&cwd, status, "twig daemon not running; starting it")
+        }
+        Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
+            not_answered();
+            local_prompt(&cwd, status, "twig daemon not answering; restarting it (twig status)")
+        }
+        Err(e) => local_prompt(&cwd, status, &format!("twig daemon: {e}")),
     };
+    print_prompt(&p, &r)
+}
+
+fn print_prompt(p: &str, r: &str) -> i32 {
     let mut out = io::stdout().lock();
     // An empty line would be dropped by tcsh's word splitting, and
     // $_tw[2] would then be out of range.
-    let r = if r.is_empty() { "%{%}".to_string() } else { r };
+    let r = if r.is_empty() { "%{%}" } else { r };
     let _ = writeln!(out, "{p}\n{r}");
     0
 }
 
 /// The prompt drawn without the daemon: everything that is quick to find
 /// out here, and nothing that isn't.
-fn local_prompt(cwd: &str, status: i32) -> (String, String) {
+fn local_prompt(cwd: &str, status: i32, why: &str) -> (String, String) {
     let cfg = config::read(&paths::config_file()).or_else(|_| config::load(config::Config::default())).expect("defaults load");
     let env: HashMap<String, String> = env::vars().collect();
     let host = paths::hostname();
@@ -125,7 +178,7 @@ fn local_prompt(cwd: &str, status: i32) -> (String, String) {
         facts: &facts,
         branch,
         git: None,
-        notice: None,
+        notice: Some((why.to_string(), crate::notices::Level::Error, 0)),
         jobs: String::new(),
     };
     let (p, r) = render::render(&ctx, None);
@@ -136,6 +189,9 @@ fn local_prompt(cwd: &str, status: i32) -> (String, String) {
 /// read from the file postcmd wrote it to.
 pub fn hook(args: &[String]) -> i32 {
     let Some(pid) = args.first().and_then(|a| a.parse::<u32>().ok()) else { return 2 };
+    if backing_off() {
+        return 0;
+    }
     let (cmd, event) = if args.len() > 1 {
         (args[1..].join(" "), None)
     } else {
