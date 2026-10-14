@@ -1,0 +1,82 @@
+# twig settings. Saved changes take effect at the next prompt; if the file
+# has a mistake, the last good settings stay and the prompt says so.
+# `twig check` reads this file and shows what the prompt would look like.
+
+[prompt]
+# {name} is a variable, {name:style} gives it a style, {"text":style} is
+# styled text, {$VAR} is an environment variable. Anything in [ ] is left out
+# when every variable inside it is empty. \[ \] \{ \} for the characters.
+#
+# Variables:
+#   time host fqdn user ip cwd dir symbol status duration
+#   git (all of the status below, together)
+#   git_branch git_ahead git_behind git_staged git_changed git_untracked
+#   git_stash git_conflicts git_clean git_dirty git_state
+#   jobs notice battery load
+#   and the name of each [[probe]]
+format = """
+-({time:cyan} {host:host} {ip:host} {cwd:green,bold}[ {git_branch:magenta}[ {git}]])-[ {jobs}][ {notice}]
+{symbol} """
+
+# Used instead when the line above doesn't fit the terminal.
+narrow = """
+{cwd:green,bold}[ {git_branch:magenta}[ {git}]][ {notice}]
+{symbol} """
+
+# At the right edge: of the line above the cursor when the prompt has two
+# lines (tcsh shows no right prompt then), else of the line you type on.
+right = "[{duration}][ {status}]"
+
+time = "%H:%M:%S"
+symbol = "%"
+symbol_style = "bold"
+symbol_error_style = "red,bold"
+duration_min = "2s"
+
+# The color of each machine, for the `host` style. Patterns may use * and ?.
+# The full host name is tried first, then the short one.
+[hosts]
+# "laptop*" = "blue"
+# "*.example.com" = "orange"
+
+[git]
+wait = "80ms"      # how long a prompt waits for a fresh status
+fetch = "15m"      # fetch in the background to see what's new upstream; "off" to not
+poll = "1m"        # look again at repositories with a shell in them
+
+[live]
+enabled = true     # redraw the line above the cursor when it changes
+
+[disk]
+paths = ["/", "~"]
+warn = 90
+
+[battery]
+low = 15
+
+[units]
+enabled = true     # say when a systemd unit has failed
+
+[history]
+size = 10000
+ignore = []        # e.g. ["ls", "cd *"]
+key = "^R"         # opens the history search
+
+[jobs]
+desktop_after = "30s"
+
+# A probe runs a command now and then. Its first line of output is the
+# variable {name}; `notice` is shown while the command fails.
+#
+# [[probe]]
+# name = "vpn"
+# run = "ip link show tun0 >/dev/null 2>&1 && echo vpn"
+# every = "10s"
+#
+# [[probe]]
+# name = "certs"
+# run = "test -f ~/.cert/valid"
+# every = "5m"
+# hosts = ["work*"]
+# notice = "certificate expired: run renew"
+# level = "error"
