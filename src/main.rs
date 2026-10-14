@@ -23,6 +23,7 @@ twig: a fast tcsh prompt, with a daemon that keeps it up to date.
   twig status           what the daemon knows: shells, repositories, probes
   twig check [FILE]     read the settings, say what is wrong, show the prompt
   twig remove           take the service off this machine
+  twig timings          how long each prompt takes, above it; again to stop
 
 Notices: messages on the prompt that go away by themselves.
 
@@ -81,6 +82,7 @@ fn main() {
         "check" => setup::check(&rest),
         "setup" => setup::setup(),
         "remove" => setup::remove(),
+        "timings" => client::timings(),
         "reload" | "stop" => client::simple(&cmd),
         "" | "help" | "-h" | "--help" => {
             print!("{HELP}");

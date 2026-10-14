@@ -134,15 +134,42 @@ daemon, the daemon drawing the prompt, and tcsh setting it.
 
 The daemon waits up to 80 ms (`git.wait`) for a fresh git status after a
 command. A repository whose status takes longer gets its prompt at once
-with the last status, and the new one is drawn when it is ready.
+with the last status, and the new one is drawn when it is ready. After an
+empty line nothing has run, so nothing is waited for.
+
+`twig timings` shows where the time goes, in a box above each prompt of
+that shell until you run it again:
+
+```
+╭─ twig 2.98 ms ──────────────────────────╮
+│ prep         0.02 ms   0%               │
+│ connect      0.03 ms   0%               │
+│ daemon       2.81 ms  94% █████████▍    │
+│   read       0.02 ms   0%               │
+│   lock       0.00 ms   0%               │
+│   state      0.04 ms   1% ▏             │
+│   git find   0.00 ms   0%               │
+│   git wait   2.70 ms  90% █████████     │
+│   render     0.04 ms   1% ▏             │
+│   escape     0.00 ms   0%               │
+│ wire         0.12 ms   4% ▍             │
+│ git status   2.64 ms  in the background │
+╰─────────────────────────────────────────╯
+```
+
+`prep` is twig gathering the directory and environment, `wire` the socket
+and the scheduler, and the steps under `daemon` its own work. Not counted:
+tcsh starting twig, about 0.3 ms.
 
 ## How it works
 
 tcsh runs `precmd` before each prompt and `postcmd` before each command.
-`twig init tcsh` sets both: `postcmd` saves the command line (from the
-`history` builtin, since `$_` is the previous command at that point) and
-tells the daemon a command is starting; `precmd` sends the exit status,
-the directory and the environment, and gets back the prompt.
+`twig init tcsh` sets both: `postcmd` saves the command line and its
+history number (from the `history` builtin, since `$_` is the previous
+command at that point; an empty line runs `postcmd` too, with the number
+of the line before) and tells the daemon a command is starting; `precmd`
+sends the exit status, the directory and the environment, and gets back
+the prompt.
 
 The daemon redraws the line above the cursor only while the shell is in
 front of its terminal (`/proc` says which process group the terminal

@@ -72,10 +72,11 @@ pub fn init(args: &[String]) -> i32 {
     let lines = [
         format!("set _twig_rt = \"{rt}\""),
         format!("alias precmd 'set _tw = (\"`{exe} prompt $$ $status`\"); set prompt = \"$_tw[1]\"; set rprompt = \"$_tw[2]\"'"),
-        // $_ is the previous command at this point, and is evaluated again
-        // when quoted into a command; the history builtin gives the line
-        // about to run, written straight to a file.
-        format!("alias postcmd 'history -h 1 >! \"$_twig_rt/cmd.$$\"; {exe} hook $$'"),
+        // The history builtin gives the line about to run, with its event
+        // number: an empty line runs postcmd too, and repeats the number.
+        // ($_ is the previous command here, and is evaluated again when
+        // quoted into a command.)
+        format!("alias postcmd 'history 1 >! \"$_twig_rt/cmd.$$\"; {exe} hook $$'"),
         format!("alias _twig_pick '{exe} pick $$ && history -L \"$_twig_rt/pick.$$\"'"),
         format!("alias z 'set _twz = \"`{exe} z \\!*`\"; if (\"$_twz\" != \"\") cd \"$_twz\"'"),
         format!("bindkey -s '{key}' '^A^K_twig_pick^M^P'"),

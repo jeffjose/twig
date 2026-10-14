@@ -45,12 +45,16 @@ struct Shell {
     duration_ms: Option<u64>,
     /// The command running now: (command line, start, directory).
     pending: Option<(String, u64, String)>,
+    /// The history number of the last command line (see Request::Hook).
+    last_event: Option<u64>,
     busy: bool,
     replied: Instant,
     time_secs: i64,
     cols: Option<u16>,
     /// The repository the shell is in.
     root: Option<PathBuf>,
+    /// Show how long each part of drawing the prompt took (`twig timings`).
+    timings: bool,
     /// The line above the cursor as last drawn.
     info: Option<String>,
 }
@@ -65,11 +69,13 @@ impl Shell {
             status: 0,
             duration_ms: None,
             pending: None,
+            last_event: None,
             busy: false,
             replied: Instant::now(),
             time_secs: 0,
             cols: None,
             root: None,
+            timings: false,
             info: None,
         }
     }
@@ -236,26 +242,38 @@ pub fn run() -> i32 {
 }
 
 fn serve(sh: S, mut conn: UnixStream) {
+    let t0 = Instant::now();
     let _ = conn.set_read_timeout(Some(Duration::from_secs(5)));
     let mut line = String::new();
     if BufReader::new(&conn).read_line(&mut line).is_err() {
         return;
     }
     let reply = match serde_json::from_str::<Request>(&line) {
-        Ok(req) => handle(&sh, req),
+        Ok(req) => handle(&sh, req, t0),
         Err(e) => json!({ "error": format!("bad request: {e}") }),
     };
     let _ = conn.write_all(reply.to_string().as_bytes());
 }
 
-fn handle(sh: &S, req: Request) -> Value {
+fn handle(sh: &S, req: Request, t0: Instant) -> Value {
     match req {
-        Request::Prompt { pid, status, cwd, env } => prompt(sh, pid, status, cwd, env),
-        Request::Hook { pid, cmd, cwd } => {
+        Request::Prompt { pid, status, cwd, env } => prompt(sh, pid, status, cwd, env, t0),
+        Request::Timings { pid } => {
+            let mut st = sh.lock();
+            let s = st.shells.entry(pid).or_insert_with(|| Shell::new(pid));
+            s.timings = !s.timings;
+            json!({ "timings": s.timings })
+        }
+        Request::Hook { pid, cmd, cwd, event } => {
             let mut st = sh.lock();
             let keep = history::keep(&cmd, &st.cfg.raw.history.ignore);
             let root = git::find(Path::new(&cwd)).map(|r| r.root);
             let shell = st.shells.entry(pid).or_insert_with(|| Shell::new(pid));
+            // The same history number again: an empty line, nothing runs.
+            if event.is_some() && event == shell.last_event {
+                return json!({});
+            }
+            shell.last_event = event.or(shell.last_event);
             shell.busy = true;
             if keep && shell.pending.is_none() {
                 shell.pending = Some((cmd.trim().to_string(), now_ms(), cwd));
@@ -328,9 +346,12 @@ fn handle(sh: &S, req: Request) -> Value {
     }
 }
 
-fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>) -> Value {
+fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>, t0: Instant) -> Value {
+    // Marks for `twig timings`: the time at the end of each step.
+    let mut marks: Vec<(&str, Instant)> = vec![("read", Instant::now())];
     let now = now_ms();
     let mut st = sh.lock();
+    marks.push(("lock", Instant::now()));
     let cfg = st.cfg.clone();
     let host = st.host.clone();
 
@@ -359,10 +380,12 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
     if moved {
         st.dirs.visit(&cwd);
     }
+    marks.push(("state", Instant::now()));
 
     let mut root = None;
     if cfg.raw.git.enabled {
         if let Some(repo) = git::find(Path::new(&cwd)) {
+            marks.push(("git find", Instant::now()));
             let r = repo.root.clone();
             if !st.repos.contains_key(&r) {
                 let watches = add_watches(&mut st, &repo);
@@ -399,17 +422,41 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
             root = Some(r);
         }
     }
+    marks.push(("git wait", Instant::now()));
     if let Some(s) = st.shells.get_mut(&pid) {
         s.root = root;
     }
 
     let Some((p, right)) = render_for(&st, pid, now) else { return json!({ "error": "no shell" }) };
+    marks.push(("render", Instant::now()));
     st.notices.shown(pid, now);
     if let Some(s) = st.shells.get_mut(&pid) {
         s.info = render::info_line(&p).map(String::from);
         s.replied = Instant::now();
     }
-    json!({ "prompt": tcsh::escape(&p), "right": tcsh::escape(&right) })
+    let (p, right) = (tcsh::escape(&p), tcsh::escape(&right));
+    marks.push(("escape", Instant::now()));
+    let mut reply = json!({ "prompt": p, "right": right });
+    if st.shells.get(&pid).is_some_and(|s| s.timings) {
+        // Microseconds per step, in order; a step that didn't happen (no
+        // repository) takes no time.
+        let mut steps = Vec::new();
+        let mut prev = t0;
+        for (name, at) in &marks {
+            steps.push(json!([name, at.duration_since(prev).as_micros() as u64]));
+            prev = *at;
+        }
+        let bg = root_cost(&st, pid);
+        reply["timings"] = json!({ "steps": steps, "total": prev.duration_since(t0).as_micros() as u64, "git_status": bg });
+    }
+    reply
+}
+
+/// How long the last git status took for a shell's repository, in the
+/// background (microseconds).
+fn root_cost(st: &State, pid: u32) -> Option<u64> {
+    let root = st.shells.get(&pid)?.root.as_ref()?;
+    Some(st.repos.get(root)?.cost.as_micros() as u64)
 }
 
 fn render_for(st: &State, pid: u32, now: u64) -> Option<(String, String)> {
