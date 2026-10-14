@@ -23,9 +23,14 @@ format = """
 -({time:cyan} {host:host} {ip:host} {cwd:green,bold}[ {git_branch:magenta}[ {git}]])-[ {jobs}][ {notice}]
 {symbol} """
 
-# Used instead when the line above doesn't fit the terminal.
+# Used instead when the line above doesn't fit the terminal: all of it
+# still, over more lines. A line break inside [ ] goes with the group, so
+# jobs and the notice get a line each only when there is one.
 narrow = """
-{cwd:green,bold}[ {git_branch:magenta}[ {git}]][ {notice}]
+-({time:cyan} {host:host} {ip:host}
+ {cwd:green,bold}[ {git_branch:magenta}[ {git}]])-[
+ {jobs}][
+ {notice}]
 {symbol} """
 
 # At the right edge: of the line above the cursor when the prompt has two

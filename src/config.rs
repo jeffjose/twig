@@ -211,7 +211,7 @@ impl Default for Prompt {
     fn default() -> Self {
         Prompt {
             format: "{time:cyan} {host} {cwd:green,bold}[ {git_branch:magenta}[ {git}]][ {jobs}][ {notice}]\n{symbol} ".into(),
-            narrow: "{cwd:green,bold}[ {git_branch:magenta}[ {git}]][ {notice}]\n{symbol} ".into(),
+            narrow: "{time:cyan} {host}\n{cwd:green,bold}[ {git_branch:magenta}[ {git}]][\n{jobs}][\n{notice}]\n{symbol} ".into(),
             right: "[{duration}][ {status}]".into(),
             time: "%H:%M:%S".into(),
             symbol: "%".into(),

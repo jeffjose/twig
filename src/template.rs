@@ -307,6 +307,12 @@ mod tests {
     }
 
     #[test]
+    fn a_line_break_in_a_group_goes_with_it() {
+        assert_eq!(r("a[\n{n}]\n$", &[]), "a\n$");
+        assert_eq!(r("a[\n{n}]\n$", &[("n", "note")]), "a\nnote\n$");
+    }
+
+    #[test]
     fn groups_vanish_when_empty() {
         assert_eq!(r("a[ {x}]b", &[]), "ab");
         assert_eq!(r("a[ {x}]b", &[("x", "1")]), "a 1b");

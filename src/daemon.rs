@@ -57,6 +57,10 @@ struct Shell {
     timings: bool,
     /// The line above the cursor as last drawn.
     info: Option<String>,
+    /// How many lines the prompt was drawn on. A redraw rewrites one line,
+    /// so a change that would add or take away a line (a notice on a line
+    /// of its own) waits for the next prompt.
+    lines: usize,
 }
 
 impl Shell {
@@ -77,6 +81,7 @@ impl Shell {
             root: None,
             timings: false,
             info: None,
+            lines: 0,
         }
     }
 
@@ -488,6 +493,7 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
     st.notices.shown(pid, now);
     if let Some(s) = st.shells.get_mut(&pid) {
         s.info = render::info_line(&p).map(String::from);
+        s.lines = p.split('\n').count();
         s.replied = Instant::now();
     }
     let (p, right) = (tcsh::escape(&p), tcsh::escape(&right));
@@ -629,7 +635,7 @@ fn redraw(sh: &S, which: impl Fn(&Shell) -> bool) {
             let Some((p, _)) = render_for(&st, pid, now) else { continue };
             let Some(line) = render::info_line(&p) else { continue };
             let s = st.shells.get_mut(&pid).expect("listed");
-            if s.info.as_deref() == Some(line) {
+            if s.info.as_deref() == Some(line) || p.split('\n').count() != s.lines {
                 continue;
             }
             let cols = s.cols.unwrap_or(80) as usize;
