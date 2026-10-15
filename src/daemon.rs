@@ -15,7 +15,7 @@ use crate::jobs::{self, Job};
 use crate::notices::{Level, New, Notices};
 use crate::paths;
 use crate::probes::{self, Kind};
-use crate::proto::Request;
+use crate::proto::{Ran, Request};
 use crate::render::{self, Ctx};
 use crate::tcsh;
 use crate::util::{alive, clean, fmt_duration, now_ms, proc_groups, tty_columns, visible_width, write_tty};
@@ -28,7 +28,8 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -41,13 +42,14 @@ struct Shell {
     tty: Option<String>,
     cwd: String,
     env: HashMap<String, String>,
+    /// The hash of `env` as the shell sent it (see proto::Request::Prompt).
+    envh: u64,
     status: i32,
     duration_ms: Option<u64>,
     /// The command running now: (command line, start, directory).
     pending: Option<(String, u64, String)>,
-    /// The history number of the last command line (see Request::Hook).
+    /// The history number of the last command line (see proto::Ran).
     last_event: Option<u64>,
-    busy: bool,
     replied: Instant,
     time_secs: i64,
     cols: Option<u16>,
@@ -77,11 +79,11 @@ impl Shell {
             tty: tty_of(pid),
             cwd: String::new(),
             env: HashMap::new(),
+            envh: 0,
             status: 0,
             duration_ms: None,
             pending: None,
             last_event: None,
-            busy: false,
             replied: Instant::now(),
             time_secs: 0,
             cols: None,
@@ -92,9 +94,15 @@ impl Shell {
         }
     }
 
+    /// A command is running: postcmd wrote it to a file as it started, and
+    /// the prompt after it takes the file away.
+    fn busy(&self, rt: &Path) -> bool {
+        rt.join(format!("cmd.{}", self.pid)).exists()
+    }
+
     /// Whether the daemon may draw on this shell's terminal now.
-    fn waiting_at_prompt(&self) -> bool {
-        if self.busy || self.replied.elapsed() < SETTLE || self.info.is_none() {
+    fn waiting_at_prompt(&self, rt: &Path) -> bool {
+        if self.replied.elapsed() < SETTLE || self.info.is_none() || self.busy(rt) {
             return false;
         }
         let Some(tty) = &self.tty else { return false };
@@ -217,6 +225,8 @@ struct State {
     slots: Vec<Slot>,
     inotify: i32,
     watches: HashMap<i32, PathBuf>,
+    /// The runtime directory (the socket, the shells' command files).
+    rt: PathBuf,
     started: Instant,
     /// The daemon's steps of the last prompts, for `twig info`.
     prompts: std::collections::VecDeque<Vec<(&'static str, u64)>>,
@@ -246,7 +256,7 @@ impl Shared {
 }
 
 pub fn run() -> i32 {
-    let rt = paths::runtime_dir();
+    let rt = paths::runtime_dir_made();
     let lock = match fs::OpenOptions::new().create(true).truncate(false).write(true).open(rt.join("lock")) {
         Ok(f) => f,
         Err(e) => {
@@ -295,6 +305,7 @@ pub fn run() -> i32 {
         slots: Vec::new(),
         inotify: unsafe { libc::inotify_init1(libc::IN_CLOEXEC) },
         watches: HashMap::new(),
+        rt: rt.clone(),
         started: Instant::now(),
         prompts: std::collections::VecDeque::new(),
         last_work: None,
@@ -316,32 +327,60 @@ pub fn run() -> i32 {
     let s3 = sh.clone();
     thread::spawn(move || watch_loop(s3));
 
+    // Connections go to threads that wait for them: handing one over
+    // takes 5 µs, starting a thread for it 20. `idle` is the threads
+    // waiting less the connections waiting; when it goes below zero
+    // (every thread is busy, most likely waiting for git) one more thread
+    // is started, so no prompt queues behind another.
+    let (tx, rx) = mpsc::channel::<(UnixStream, Instant)>();
+    let rx = Arc::new(Mutex::new(rx));
+    let idle = Arc::new(AtomicIsize::new(0));
+    let worker = |sh: S, rx: Arc<Mutex<mpsc::Receiver<(UnixStream, Instant)>>>, idle: Arc<AtomicIsize>| {
+        thread::spawn(move || loop {
+            idle.fetch_add(1, Ordering::SeqCst);
+            let job = rx.lock().unwrap_or_else(|e| e.into_inner()).recv();
+            let Ok((conn, t0)) = job else { return };
+            serve(&sh, conn, t0);
+        })
+    };
     for conn in listener.incoming() {
         let Ok(conn) = conn else { continue };
-        let s = sh.clone();
-        thread::spawn(move || serve(s, conn));
+        if idle.fetch_sub(1, Ordering::SeqCst) <= 0 {
+            worker(sh.clone(), rx.clone(), idle.clone());
+        }
+        let _ = tx.send((conn, Instant::now()));
     }
     drop(lock);
     0
 }
 
-fn serve(sh: S, mut conn: UnixStream) {
-    let t0 = Instant::now();
+/// One connection: a request, its answer. `t0` is when it was accepted.
+/// A prompt's history entry is written to the file after the answer is
+/// on its way: the shell doesn't wait for that.
+fn serve(sh: &S, mut conn: UnixStream, t0: Instant) {
+    let got = Instant::now();
     let _ = conn.set_read_timeout(Some(Duration::from_secs(5)));
     let mut line = String::new();
     if BufReader::new(&conn).read_line(&mut line).is_err() {
         return;
     }
-    let reply = match serde_json::from_str::<Request>(&line) {
-        Ok(req) => handle(&sh, req, t0),
-        Err(e) => json!({ "error": format!("bad request: {e}") }),
+    let (reply, later) = match serde_json::from_str::<Request>(&line) {
+        Ok(Request::Prompt { pid, status, cwd, envh, env, ran }) => prompt(sh, pid, status, cwd, envh, env, ran, t0, got),
+        Ok(req) => (handle(sh, req), None),
+        Err(e) => (json!({ "error": format!("bad request: {e}") }), None),
     };
     let _ = conn.write_all(reply.to_string().as_bytes());
+    drop(conn);
+    if let Some(e) = later {
+        if let Err(err) = history::append(&e.h, &e) {
+            eprintln!("twig: history: {err}");
+        }
+    }
 }
 
-fn handle(sh: &S, req: Request, t0: Instant) -> Value {
+fn handle(sh: &S, req: Request) -> Value {
     match req {
-        Request::Prompt { pid, status, cwd, env } => prompt(sh, pid, status, cwd, env, t0),
+        Request::Prompt { .. } => json!({ "error": "a prompt is served apart" }),
         Request::Timings { pid } => {
             let mut st = sh.lock();
             let s = st.shells.entry(pid).or_insert_with(|| Shell::new(pid));
@@ -358,7 +397,6 @@ fn handle(sh: &S, req: Request, t0: Instant) -> Value {
                 return json!({});
             }
             shell.last_event = event.or(shell.last_event);
-            shell.busy = true;
             if keep && shell.pending.is_none() {
                 shell.pending = Some((cmd.trim().to_string(), now_ms(), cwd));
             }
@@ -449,9 +487,21 @@ fn handle(sh: &S, req: Request, t0: Instant) -> Value {
     }
 }
 
-fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>, t0: Instant) -> Value {
+/// The answer to a prompt, and the history entry to write once it is sent.
+#[allow(clippy::too_many_arguments)]
+fn prompt(
+    sh: &S,
+    pid: u32,
+    status: i32,
+    cwd: String,
+    envh: u64,
+    env: Option<Vec<(String, String)>>,
+    ran: Option<Ran>,
+    t0: Instant,
+    got: Instant,
+) -> (Value, Option<Entry>) {
     // Marks for `twig timings`: the time at the end of each step.
-    let mut marks: Vec<(&'static str, Instant)> = vec![("read", Instant::now())];
+    let mut marks: Vec<(&'static str, Instant)> = vec![("queue", got), ("read", Instant::now())];
     let now = now_ms();
     let mut st = sh.lock();
     marks.push(("lock", Instant::now()));
@@ -459,13 +509,33 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
     let host = st.host.clone();
 
     let shell = st.shells.entry(pid).or_insert_with(|| Shell::new(pid));
-    let ran = shell.pending.take();
+    // The environment, kept from when it was last sent; when the shell's
+    // has changed (or this is its first prompt), it is asked for.
+    match env {
+        Some(e) => {
+            shell.env = e.into_iter().collect();
+            shell.envh = envh;
+        }
+        None if shell.envh != envh => return (json!({ "env": "?" }), None),
+        None => {}
+    }
+    // The command that ran: from the hook of an older shell, else brought
+    // by the prompt. The same history number again is an empty line:
+    // nothing ran. It ran where the shell was before this prompt.
+    let ran = shell.pending.take().or_else(|| {
+        let r = ran?;
+        let again = r.event.is_some() && r.event == shell.last_event;
+        shell.last_event = r.event.or(shell.last_event);
+        if again || !history::keep(&r.cmd, &cfg.raw.history.ignore) {
+            return None;
+        }
+        let there = if shell.cwd.is_empty() { cwd.clone() } else { shell.cwd.clone() };
+        Some((r.cmd.trim().to_string(), r.start, there))
+    });
     let moved = shell.cwd != cwd;
     shell.duration_ms = ran.as_ref().map(|r| now.saturating_sub(r.1));
     shell.status = status;
     shell.cwd = cwd.clone();
-    shell.env = env.into_iter().collect();
-    shell.busy = false;
     // A prompt is on its way: no redraws until it has been drawn (SETTLE
     // after the answer). Not only after it: the git status this prompt
     // waits for may finish, and redraw, before then, and twig prompt runs
@@ -477,14 +547,12 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
     }
     shell.cols = shell.tty.as_deref().and_then(tty_columns);
 
-    if let Some((cmd, start, wd)) = &ran {
+    let later = ran.as_ref().map(|(cmd, start, wd)| {
         let e = Entry { t: *start, d: now.saturating_sub(*start), s: Some(status), c: cmd.clone(), w: wd.clone(), h: host.clone(), p: pid };
-        if let Err(err) = history::append(&host, &e) {
-            eprintln!("twig: history: {err}");
-        }
-        st.history.push(e);
+        st.history.push(e.clone());
         st.history_dirty.get_or_insert_with(Instant::now);
-    }
+        e
+    });
     if moved {
         st.dirs.visit(&cwd);
     }
@@ -536,7 +604,7 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
         s.root = root;
     }
 
-    let Some((p, right)) = render_for(&st, pid, now) else { return json!({ "error": "no shell" }) };
+    let Some((p, right)) = render_for(&st, pid, now) else { return (json!({ "error": "no shell" }), later) };
     marks.push(("render", Instant::now()));
     st.notices.shown(pid, now);
     if let Some(s) = st.shells.get_mut(&pid) {
@@ -567,7 +635,7 @@ fn prompt(sh: &S, pid: u32, status: i32, cwd: String, env: Vec<(String, String)>
         st.prompts.pop_front();
     }
     st.prompts.push_back(steps);
-    reply
+    (reply, later)
 }
 
 fn render_for(st: &State, pid: u32, now: u64) -> Option<(String, String)> {
@@ -679,7 +747,7 @@ fn redraw(sh: &S, which: impl Fn(&Shell) -> bool) {
         let now = now_ms();
         let pids: Vec<u32> = st.shells.values().filter(|s| which(s)).map(|s| s.pid).collect();
         for pid in pids {
-            if !st.shells.get(&pid).is_some_and(Shell::waiting_at_prompt) {
+            if !st.shells.get(&pid).is_some_and(|s| s.waiting_at_prompt(&st.rt)) {
                 continue;
             }
             let Some((p, _)) = render_for(&st, pid, now) else { continue };
@@ -814,9 +882,20 @@ fn tick_loop(sh: S) {
         for p in dead {
             st.shells.remove(&p);
             st.notices.orphan(p);
-            let rt = paths::runtime_dir();
-            let _ = fs::remove_file(rt.join(format!("cmd.{p}")));
-            let _ = fs::remove_file(rt.join(format!("pick.{p}")));
+            let _ = fs::remove_file(st.rt.join(format!("cmd.{p}")));
+            let _ = fs::remove_file(st.rt.join(format!("pick.{p}")));
+        }
+        // And the files of shells that never drew a prompt (a script with
+        // the aliases runs postcmd, not precmd) and have gone.
+        if (now / 1000).is_multiple_of(60) {
+            for f in fs::read_dir(&st.rt).into_iter().flatten().flatten() {
+                let name = f.file_name();
+                let name = name.to_string_lossy();
+                let pid = name.strip_prefix("cmd.").or_else(|| name.strip_prefix("pick.")).and_then(|p| p.parse::<u32>().ok());
+                if pid.is_some_and(|p| !alive(p)) {
+                    let _ = fs::remove_file(f.path());
+                }
+            }
         }
 
         // Jobs whose keeper was killed before it could report.
@@ -1028,10 +1107,12 @@ fn status(sh: &S) -> Value {
         .shells
         .values()
         .map(|s| {
-            json!({
-                "pid": s.pid, "tty": s.tty, "cwd": s.cwd, "busy": s.busy,
-                "running": s.pending.as_ref().map(|p| &p.0),
-            })
+            // What is running, from the file postcmd wrote as it started.
+            let running = s.pending.as_ref().map(|p| p.0.clone()).or_else(|| {
+                let line = fs::read_to_string(st.rt.join(format!("cmd.{}", s.pid))).ok()?;
+                Some(history::parse_tcsh_line(&line).0)
+            });
+            json!({ "pid": s.pid, "tty": s.tty, "cwd": s.cwd, "running": running })
         })
         .collect();
     let repos: Vec<Value> = st

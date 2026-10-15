@@ -59,18 +59,26 @@ pub fn load_all() -> Vec<Entry> {
     all
 }
 
+/// Line by line through one buffer: Ctrl-R and `twig h` load every command
+/// this way, and wait for it. (The whole file at once was slower: a fresh
+/// half-megabyte buffer costs more in page faults than 8 KB in cache.)
 fn load_file(path: &Path, into: &mut Vec<Entry>) {
     let Ok(f) = fs::File::open(path) else { return };
-    for line in BufReader::new(f).lines().map_while(Result::ok) {
-        if let Ok(e) = serde_json::from_str::<Entry>(&line) {
+    let mut r = BufReader::new(f);
+    let mut line = Vec::with_capacity(256);
+    while matches!(r.read_until(b'\n', &mut line), Ok(n) if n > 0) {
+        // Checked as text once here, not field by field in the parser.
+        if let Some(e) = std::str::from_utf8(&line).ok().and_then(|l| serde_json::from_str::<Entry>(l).ok()) {
             into.push(e);
         }
+        line.clear();
     }
 }
 
-/// Newest first, each command once.
+/// Newest first, each command once. (Every keystroke of Ctrl-R does this
+/// over thousands of commands: the set hashes quickly, not securely.)
 pub fn unique_newest<'a>(entries: impl DoubleEndedIterator<Item = &'a Entry>) -> Vec<&'a Entry> {
-    let mut seen = HashSet::new();
+    let mut seen: HashSet<&str, crate::util::Quick> = HashSet::with_capacity_and_hasher(1024, crate::util::Quick);
     entries.rev().filter(|e| seen.insert(e.c.as_str())).collect()
 }
 
@@ -106,6 +114,17 @@ pub fn import_tcsh(path: &Path, host: &str) -> io::Result<Vec<Entry>> {
     Ok(out)
 }
 
+/// A line of tcsh's `history 1`: "   123\t14:02\tmake test" (the number, the
+/// time, the command). Anything else is taken as the command alone.
+pub fn parse_tcsh_line(line: &str) -> (String, Option<u64>) {
+    let line = line.trim_end_matches('\n');
+    let mut f = line.splitn(3, '\t');
+    match (f.next().and_then(|n| n.trim().parse().ok()), f.next(), f.next()) {
+        (Some(n), Some(_), Some(cmd)) => (cmd.to_string(), Some(n)),
+        _ => (line.to_string(), None),
+    }
+}
+
 /// Whether a command is kept: not twig's own aliases, not an ignore pattern.
 pub fn keep(cmd: &str, ignore: &[String]) -> bool {
     let c = cmd.trim();
@@ -122,9 +141,10 @@ pub struct Filter {
 }
 
 impl Filter {
-    pub fn matches(&self, e: &Entry) -> bool {
-        let c = e.c.to_lowercase();
-        self.terms.iter().all(|t| c.contains(t.as_str()))
+    /// `lower` is the command in lower case, made once by the caller: the
+    /// search runs this over every command at each keystroke.
+    pub fn matches(&self, e: &Entry, lower: &str) -> bool {
+        self.terms.iter().all(|t| lower.contains(t.as_str()))
             && self.here.as_ref().is_none_or(|h| &e.w == h)
             && (!self.failed || e.s.is_some_and(|s| s != 0))
             && (!self.ok || e.s.is_none_or(|s| s == 0))
@@ -185,12 +205,13 @@ pub fn cmd(args: &[String]) -> i32 {
     let dim = |s: &str| if color { Style::of("dim").paint(s) } else { s.to_string() };
     let red = |s: &str| if color { Style::of("red").paint(s) } else { s.to_string() };
     let mut out = io::stdout().lock();
+    let hit = |e: &&Entry| f.matches(e, &e.c.to_lowercase());
     let list: Vec<&Entry> = if all {
-        let mut v: Vec<&Entry> = entries.iter().rev().filter(|e| f.matches(e)).take(n).collect();
+        let mut v: Vec<&Entry> = entries.iter().rev().filter(hit).take(n).collect();
         v.reverse();
         v
     } else {
-        let mut v: Vec<&Entry> = unique_newest(entries.iter().filter(|e| f.matches(e))).into_iter().take(n).collect();
+        let mut v: Vec<&Entry> = unique_newest(entries.iter().filter(hit)).into_iter().take(n).collect();
         v.reverse();
         v
     };
@@ -261,13 +282,20 @@ mod tests {
     }
 
     #[test]
+    fn tcsh_lines() {
+        assert_eq!(parse_tcsh_line("   123\t14:02\tmake test\n"), ("make test".into(), Some(123)));
+        assert_eq!(parse_tcsh_line("     7\t9:05\techo a\tb"), ("echo a\tb".into(), Some(7)));
+        assert_eq!(parse_tcsh_line("make test"), ("make test".into(), None));
+    }
+
+    #[test]
     fn keeps_and_filters() {
         assert!(!keep("_twig_pick", &[]));
         assert!(!keep("ls", &["ls".into()]));
         assert!(!keep("cd /tmp", &["cd *".into()]));
         assert!(keep("make", &["ls".into()]));
         let f = Filter { terms: vec!["mak".into()], here: Some("/x".into()), failed: false, ok: true, host: None, shell: None };
-        assert!(f.matches(&e(1, "Make all")));
-        assert!(!f.matches(&Entry { s: Some(2), ..e(1, "make") }));
+        assert!(f.matches(&e(1, "Make all"), "make all"));
+        assert!(!f.matches(&Entry { s: Some(2), ..e(1, "make") }, "make"));
     }
 }

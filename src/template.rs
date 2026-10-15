@@ -110,33 +110,32 @@ impl Style {
         self
     }
 
+    /// The escape sequence that turns the style on; empty for no style.
+    /// Written into one string (a prompt paints a dozen of these).
     pub fn ansi(&self) -> String {
-        let mut codes: Vec<String> = Vec::new();
-        if self.bold {
-            codes.push("1".into());
+        use std::fmt::Write;
+        let mut s = String::with_capacity(24);
+        s.push_str("\x1b[");
+        for (on, code) in [(self.bold, "1;"), (self.dim, "2;"), (self.italic, "3;"), (self.underline, "4;")] {
+            if on {
+                s.push_str(code);
+            }
         }
-        if self.dim {
-            codes.push("2".into());
+        for (c, base) in [(self.fg, 30u8), (self.bg, 40u8)] {
+            let _ = match c {
+                None => continue,
+                Some(Color::Basic(n)) if n < 8 => write!(s, "{};", base + n),
+                Some(Color::Basic(n)) => write!(s, "{};", base + 60 + n - 8),
+                Some(Color::Index(n)) => write!(s, "{};5;{n};", base + 8),
+                Some(Color::Rgb(r, g, b)) => write!(s, "{};2;{r};{g};{b};", base + 8),
+            };
         }
-        if self.italic {
-            codes.push("3".into());
+        if s.len() == 2 {
+            return String::new();
         }
-        if self.underline {
-            codes.push("4".into());
-        }
-        let mut push = |c: Color, base: u8| match c {
-            Color::Basic(n) if n < 8 => codes.push((base + n).to_string()),
-            Color::Basic(n) => codes.push((base + 60 + n - 8).to_string()),
-            Color::Index(n) => codes.push(format!("{};5;{n}", base + 8)),
-            Color::Rgb(r, g, b) => codes.push(format!("{};2;{r};{g};{b}", base + 8)),
-        };
-        if let Some(c) = self.fg {
-            push(c, 30);
-        }
-        if let Some(c) = self.bg {
-            push(c, 40);
-        }
-        if codes.is_empty() { String::new() } else { format!("\x1b[{}m", codes.join(";")) }
+        s.pop();
+        s.push('m');
+        s
     }
 
     pub fn paint(&self, text: &str) -> String {

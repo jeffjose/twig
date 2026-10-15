@@ -70,7 +70,7 @@ pub fn init(args: &[String]) -> i32 {
     }
     let exe = env::current_exe().ok().and_then(|p| p.to_str().map(String::from)).unwrap_or_else(|| "twig".into());
     let cfg = config::read(&paths::config_file()).map(|l| l.raw).unwrap_or_default();
-    let rt = paths::runtime_dir();
+    let rt = paths::runtime_dir_made();
     let rt = rt.display();
     let hist = paths::tcsh_history();
     let key = &cfg.history.key;
@@ -84,8 +84,12 @@ pub fn init(args: &[String]) -> i32 {
         // The history builtin gives the line about to run, with its event
         // number: an empty line runs postcmd too, and repeats the number.
         // ($_ is the previous command here, and is evaluated again when
-        // quoted into a command.)
-        "alias postcmd 'history 1 >! \"$_twig_rt/cmd.$$\"; $_twig hook $$'".into(),
+        // quoted into a command.) `twig prompt` reads the file and takes it
+        // away. A line with ; runs postcmd once per command, so the line is
+        // appended each time: the file's birth is when the line started,
+        // its first line is the command. (A builtin inside a one-line if
+        // writes nothing, so there is no guard.) No process starts here.
+        "alias postcmd 'history 1 >>! \"$_twig_rt/cmd.$$\"'".into(),
         "alias _twig_pick '$_twig pick $$ && history -L \"$_twig_rt/pick.$$\"'".into(),
         "alias z 'set _twz = \"`$_twig z \\!*`\"; if (\"$_twz\" != \"\") cd \"$_twz\"'".into(),
         format!("bindkey -s '{key}' '^A^K_twig_pick^M^P'"),

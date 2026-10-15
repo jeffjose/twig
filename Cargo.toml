@@ -15,3 +15,7 @@ toml = { version = "1", default-features = false, features = ["parse", "serde", 
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+# A prompt is a new process every time: the less there is to load, the
+# sooner it runs. The binary is linked statically too (.cargo/config.toml).
+panic = "abort"
+strip = true

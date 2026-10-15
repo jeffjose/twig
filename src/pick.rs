@@ -162,7 +162,7 @@ fn cut(s: &str, width: usize) -> String {
 /// `twig pick PID`
 pub fn run(args: &[String]) -> i32 {
     let pid: u32 = args.first().and_then(|a| a.parse().ok()).unwrap_or_else(|| unsafe { libc::getppid() } as u32);
-    let out = paths::runtime_dir().join(format!("pick.{pid}"));
+    let out = paths::runtime_dir_made().join(format!("pick.{pid}"));
     let entries = history::load_all();
     let cwd = std::env::current_dir().ok().and_then(|p| p.to_str().map(String::from)).unwrap_or_default();
     let chosen = match Tty::open() {
@@ -193,6 +193,8 @@ fn ui(tty: &mut Tty, entries: &[Entry], cwd: &str, pid: u32) -> Option<String> {
     let dim = Style::of("dim");
     let red = Style::of("red");
     let hi = Style::of("bold bg:236");
+    // Each command in lower case, once: every keystroke searches them all.
+    let lower: Vec<String> = entries.iter().map(|e| e.c.to_lowercase()).collect();
     loop {
         let terms: Vec<String> = query.to_lowercase().split_whitespace().map(String::from).collect();
         let f = history::Filter {
@@ -203,7 +205,7 @@ fn ui(tty: &mut Tty, entries: &[Entry], cwd: &str, pid: u32) -> Option<String> {
             host: None,
             shell: (scope == Scope::Shell).then_some(pid),
         };
-        let list = history::unique_newest(entries.iter().filter(|e| f.matches(e)));
+        let list = history::unique_newest(entries.iter().zip(&lower).filter(|(e, l)| f.matches(e, l)).map(|(e, _)| e));
         let (rows, cols) = tty.size();
         let height = rows - 2;
         sel = sel.min(list.len().saturating_sub(1));

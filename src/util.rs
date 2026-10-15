@@ -5,7 +5,6 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub fn now_ms() -> u64 {
@@ -164,38 +163,46 @@ pub struct Ran {
 
 /// Run a command and give up on it after `limit`, killing its whole process
 /// group so that nothing it started is left behind.
+///
+/// The prompt waits for this (a git status after each command), so it is
+/// kept lean: the process group is set by the kernel at spawn (a closure
+/// run before exec would make std fork the daemon rather than posix_spawn
+/// the command), and the output is waited for with poll, no thread and
+/// no sleeping, so the result is seen the moment the command ends.
 pub fn run_with_limit(cmd: &mut Command, limit: Duration) -> io::Result<Ran> {
+    use std::os::unix::io::AsRawFd;
     use std::os::unix::process::CommandExt;
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setpgid(0, 0);
-            Ok(())
-        });
-    }
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0);
     let mut child: Child = cmd.spawn()?;
     let mut out = child.stdout.take().expect("piped");
-    let reader = thread::spawn(move || {
-        let mut s = Vec::new();
-        let _ = out.read_to_end(&mut s);
-        s
-    });
-    let start = Instant::now();
-    let mut timed_out = false;
-    let status = loop {
-        if let Some(st) = child.try_wait()? {
-            break st.code();
+    let deadline = Instant::now() + limit;
+    let mut stdout = Vec::new();
+    let mut buf = [0u8; 8192];
+    // Until the command closes its output (at its end), or time is up.
+    let timed_out = loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let ms = left.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32;
+        let mut p = libc::pollfd { fd: out.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        match unsafe { libc::poll(&mut p, 1, ms) } {
+            0 => break true,
+            n if n < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted => continue,
+            n if n < 0 => return Err(io::Error::last_os_error()),
+            _ => {}
         }
-        if start.elapsed() > limit {
-            unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
-            let _ = child.wait();
-            timed_out = true;
-            break None;
+        match out.read(&mut buf) {
+            Ok(0) => break false,
+            Ok(n) => stdout.extend_from_slice(&buf[..n]),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
         }
-        thread::sleep(Duration::from_millis(if start.elapsed() < Duration::from_millis(50) { 1 } else { 10 }));
     };
-    let stdout = if timed_out { Vec::new() } else { reader.join().unwrap_or_default() };
-    Ok(Ran { status, stdout: String::from_utf8_lossy(&stdout).into_owned(), timed_out })
+    if timed_out {
+        unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+        let _ = child.wait();
+        return Ok(Ran { status: None, stdout: String::new(), timed_out: true });
+    }
+    let status = child.wait()?.code();
+    Ok(Ran { status, stdout: String::from_utf8_lossy(&stdout).into_owned(), timed_out: false })
 }
 
 /// Start a program that outlives us: its own session, no terminal, output to
@@ -265,6 +272,34 @@ pub fn proc_groups(pid: u32) -> Option<(i32, i32)> {
 
 pub fn alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// A hasher for sets of our own strings (commands, paths): a multiply and
+/// a rotate per word, where the standard one guards against attackers
+/// with a few hundred cycles more per key.
+#[derive(Clone, Copy, Default)]
+pub struct Quick;
+
+impl std::hash::BuildHasher for Quick {
+    type Hasher = QuickHasher;
+    fn build_hasher(&self) -> QuickHasher {
+        QuickHasher(0)
+    }
+}
+
+pub struct QuickHasher(u64);
+
+impl std::hash::Hasher for QuickHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for c in bytes.chunks(8) {
+            let mut b = [0u8; 8];
+            b[..c.len()].copy_from_slice(c);
+            self.0 = (self.0.rotate_left(5) ^ u64::from_le_bytes(b)).wrapping_mul(0x517c_c1b7_2722_0a95);
+        }
+    }
+    fn finish(&self) -> u64 {
+        self.0
+    }
 }
 
 /// Replace a leading home directory with ~.

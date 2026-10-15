@@ -3,18 +3,20 @@
 
 use crate::config;
 use crate::git;
+use crate::history;
 use crate::paths;
-use crate::proto::{self, Request};
+use crate::proto::{self, Ran, Request};
 use crate::render::{self, Ctx};
 use crate::tcsh;
 use crate::util::{now_ms, spawn_detached};
 use std::collections::HashMap;
 use std::env;
-use std::io::{self, Write};
+use std::fs;
+use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::Command;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use crate::template::Style;
 
 /// Longer than the daemon ever takes to answer a prompt (it answers within
@@ -42,28 +44,63 @@ const BACK_OFF: Duration = Duration::from_secs(15);
 
 /// The file that says the daemon didn't answer, shared by every shell. It
 /// holds how many times in a row that has happened.
-fn unanswered() -> std::path::PathBuf {
-    paths::runtime_dir().join("unanswered")
+fn unanswered(rt: &Path) -> std::path::PathBuf {
+    rt.join("unanswered")
 }
 
-/// Whether to leave the daemon alone for now.
-fn backing_off() -> bool {
-    std::fs::metadata(unanswered()).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|e| e < BACK_OFF))
+/// Whether to leave the daemon alone for now: None when it answered last
+/// time (there is no file), else whether the back-off is still on.
+fn backing_off(rt: &Path) -> Option<bool> {
+    let t = fs::metadata(unanswered(rt)).and_then(|m| m.modified()).ok()?;
+    Some(t.elapsed().is_ok_and(|e| e < BACK_OFF))
 }
 
 /// The daemon took too long. The second time in a row (after a back-off),
 /// one that a shell started is stopped and started again; one that systemd
 /// runs is restarted by its watchdog instead.
-fn not_answered() {
-    let count = std::fs::read_to_string(unanswered()).ok().and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0) + 1;
-    let _ = std::fs::write(unanswered(), count.to_string());
+fn not_answered(rt: &Path) {
+    let count = fs::read_to_string(unanswered(rt)).ok().and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0) + 1;
+    let _ = fs::write(unanswered(rt), count.to_string());
     if count >= 2 {
         if let Some((pid, false)) = daemon_pid() {
             unsafe { libc::kill(pid as i32, libc::SIGKILL) };
             start_daemon();
-            let _ = std::fs::remove_file(unanswered());
+            let _ = fs::remove_file(unanswered(rt));
         }
     }
+}
+
+/// A hash of the environment, straight from where libc keeps it: the
+/// daemon keeps each shell's environment, and is sent it again only when
+/// this changes. (12 KB in 2 µs; collecting it as strings is 30.)
+fn env_hash() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = crate::util::Quick.build_hasher();
+    unsafe {
+        let mut p = libc::environ;
+        while !p.is_null() && !(*p).is_null() {
+            h.write(std::ffi::CStr::from_ptr(*p).to_bytes_with_nul());
+            p = p.add(1);
+        }
+    }
+    h.finish()
+}
+
+/// The command that just ran, from the file postcmd appended the history
+/// line to as it started (see tcsh::init): the file was born when the line
+/// started, and its first line is the command. The file is taken away, so
+/// the next command gets a fresh one. None when no command ran since the
+/// last prompt.
+fn take_ran(rt: &Path, pid: u32) -> Option<Ran> {
+    let path = rt.join(format!("cmd.{pid}"));
+    let mut f = fs::File::open(&path).ok()?;
+    let meta = f.metadata().ok()?;
+    let start = meta.created().or_else(|_| meta.modified()).ok()?.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64;
+    let mut text = String::new();
+    let _ = f.read_to_string(&mut text);
+    let _ = fs::remove_file(&path);
+    let (cmd, event) = history::parse_tcsh_line(text.lines().next().unwrap_or(""));
+    Some(Ran { cmd, start, event })
 }
 
 /// The daemon's process, and whether systemd runs it (from the file it
@@ -111,17 +148,29 @@ pub fn prompt(args: &[String]) -> i32 {
     let start = Instant::now();
     let pid: u32 = args.first().and_then(|a| a.parse().ok()).unwrap_or_else(|| unsafe { libc::getppid() } as u32);
     let status: i32 = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(0);
+    let rt = paths::runtime_dir();
     let cwd = cwd();
-    let env: Vec<(String, String)> = env::vars().collect();
-    let req = Request::Prompt { pid, status, cwd: cwd.clone(), env };
+    let ran = take_ran(&rt, pid);
+    let envh = env_hash();
+    let req = Request::Prompt { pid, status, cwd: cwd.clone(), envh, env: None, ran: ran.clone() };
     let prep = start.elapsed();
-    if backing_off() {
+    let unanswered_before = backing_off(&rt);
+    if unanswered_before == Some(true) {
         let (p, r) = local_prompt(&cwd, status, "twig daemon not answering; restarting it (twig status)");
         return print_prompt(&p, &r);
     }
-    let (p, r) = match proto::send_timed(&req, PROMPT_LIMIT) {
+    let mut sent = proto::send_timed(&req, PROMPT_LIMIT);
+    // The daemon hasn't seen this environment (the shell's first prompt,
+    // or a setenv since): once more, with it.
+    if sent.as_ref().is_ok_and(|(v, _)| v["env"].is_string()) {
+        let env = Some(env::vars().collect());
+        sent = proto::send_timed(&Request::Prompt { pid, status, cwd: cwd.clone(), envh, env, ran }, PROMPT_LIMIT);
+    }
+    let (p, r) = match sent {
         Ok((v, connect)) if v["prompt"].is_string() => {
-            let _ = std::fs::remove_file(unanswered());
+            if unanswered_before.is_some() {
+                let _ = fs::remove_file(unanswered(&rt));
+            }
             let mut p = v["prompt"].as_str().unwrap_or("").to_string();
             if v["timings"].is_object() {
                 let total = start.elapsed();
@@ -141,7 +190,7 @@ pub fn prompt(args: &[String]) -> i32 {
             local_prompt(&cwd, status, "twig daemon not running; starting it")
         }
         Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
-            not_answered();
+            not_answered(&rt);
             local_prompt(&cwd, status, "twig daemon not answering; restarting it (twig status)")
         }
         Err(e) => local_prompt(&cwd, status, &format!("twig daemon: {e}")),
@@ -188,18 +237,20 @@ fn local_prompt(cwd: &str, status: i32, why: &str) -> (String, String) {
     (tcsh::escape(&p), tcsh::escape(&r))
 }
 
-/// `twig hook PID [COMMAND]`, from postcmd. Without COMMAND, the command is
-/// read from the file postcmd wrote it to.
+/// `twig hook PID [COMMAND]`: the postcmd of shells set up by an older
+/// twig (the prompt brings the command now). Without COMMAND, the command
+/// is read from the file postcmd wrote it to.
 pub fn hook(args: &[String]) -> i32 {
     let Some(pid) = args.first().and_then(|a| a.parse::<u32>().ok()) else { return 2 };
-    if backing_off() {
+    let rt = paths::runtime_dir();
+    if backing_off(&rt) == Some(true) {
         return 0;
     }
     let (cmd, event) = if args.len() > 1 {
         (args[1..].join(" "), None)
     } else {
-        let line = std::fs::read_to_string(paths::runtime_dir().join(format!("cmd.{pid}"))).unwrap_or_default();
-        parse_history_line(&line)
+        let line = fs::read_to_string(rt.join(format!("cmd.{pid}"))).unwrap_or_default();
+        history::parse_tcsh_line(&line)
     };
     let req = Request::Hook { pid, cmd, cwd: cwd(), event };
     let _ = proto::send(&req, Duration::from_millis(200));
@@ -301,25 +352,32 @@ pub fn timings() -> i32 {
     }
 }
 
-/// A line of tcsh's `history 1`: "   123\t14:02\tmake test" (the number, the
-/// time, the command). Anything else is taken as the command alone.
-fn parse_history_line(line: &str) -> (String, Option<u64>) {
-    let line = line.trim_end_matches('\n');
-    let mut f = line.splitn(3, '\t');
-    match (f.next().and_then(|n| n.trim().parse().ok()), f.next(), f.next()) {
-        (Some(n), Some(_), Some(cmd)) => (cmd.to_string(), Some(n)),
-        _ => (line.to_string(), None),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn history_lines() {
-        assert_eq!(parse_history_line("   123\t14:02\tmake test\n"), ("make test".into(), Some(123)));
-        assert_eq!(parse_history_line("     7\t9:05\techo a\tb"), ("echo a\tb".into(), Some(7)));
-        assert_eq!(parse_history_line("make test"), ("make test".into(), None));
+    fn the_environment_hash_follows_the_environment() {
+        let a = env_hash();
+        assert_eq!(a, env_hash());
+        std::env::set_var("TWIG_TEST_HASH", "1");
+        let b = env_hash();
+        std::env::set_var("TWIG_TEST_HASH", "2");
+        let c = env_hash();
+        assert!(a != b && b != c, "{a} {b} {c}");
+    }
+
+    #[test]
+    fn the_command_comes_from_the_file_once() {
+        let rt = std::env::temp_dir().join(format!("twig-ran-{}", std::process::id()));
+        fs::create_dir_all(&rt).unwrap();
+        assert!(take_ran(&rt, 7).is_none());
+        // Appended once per command of the line: the first is the line.
+        fs::write(rt.join("cmd.7"), "   12\t14:02\tmake test\n   12\t14:02\tmake test\n").unwrap();
+        let r = take_ran(&rt, 7).unwrap();
+        assert_eq!((r.cmd.as_str(), r.event), ("make test", Some(12)));
+        assert!(r.start.abs_diff(now_ms()) < 5_000);
+        assert!(take_ran(&rt, 7).is_none(), "taken away");
+        fs::remove_dir_all(&rt).unwrap();
     }
 }

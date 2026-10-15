@@ -1,3 +1,9 @@
+// The C entry point, not Rust's: a prompt is a new process each time, and
+// Rust's own start (a stack overflow handler, a check of the standard
+// descriptors, a read of /proc/self/maps) is 50 µs it doesn't need. (The
+// test harness brings its own main.)
+#![cfg_attr(not(test), no_main)]
+
 mod boxes;
 mod client;
 mod config;
@@ -53,16 +59,18 @@ History and directories:
 What the shell runs (set up by twig init tcsh):
 
   twig init tcsh        the aliases for ~/.cshrc
-  twig prompt PID STATUS, twig hook PID COMMAND, twig pick PID
+  twig prompt PID STATUS, twig pick PID
   twig daemon           the daemon itself, in the foreground
 ";
 
-fn main() {
+#[cfg_attr(not(test), no_mangle)]
+pub extern "C" fn main(_argc: libc::c_int, _argv: *const *const libc::c_char) -> libc::c_int {
     let mut args = std::env::args().skip(1);
     let cmd = args.next().unwrap_or_default();
     let rest: Vec<String> = args.collect();
+    // Without Rust's start, SIGPIPE is left as it was: `twig h | head` ends
+    // quietly, as other commands do. The daemon sets it to be ignored.
     if cmd != "daemon" {
-        // `twig h | head` ends quietly, as other commands do.
         unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     }
     let code = match cmd.as_str() {

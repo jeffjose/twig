@@ -27,6 +27,9 @@ pub fn config_file() -> PathBuf {
 /// The socket, lock and other per-boot files. A shell started without
 /// XDG_RUNTIME_DIR (su, an old screen) still finds the daemon that systemd
 /// started, because /run/user/UID is tried before /tmp.
+///
+/// Only the path: a prompt asks for it, and the directory is made where
+/// twig starts (`runtime_dir_made`).
 pub fn runtime_dir() -> PathBuf {
     let uid = unsafe { libc::getuid() };
     let base = match env::var_os("XDG_RUNTIME_DIR") {
@@ -40,7 +43,12 @@ pub fn runtime_dir() -> PathBuf {
             }
         }
     };
-    let dir = if base.ends_with(format!("twig-{uid}")) { base } else { base.join("twig") };
+    if base.ends_with(format!("twig-{uid}")) { base } else { base.join("twig") }
+}
+
+/// The runtime directory, made if it wasn't there.
+pub fn runtime_dir_made() -> PathBuf {
+    let dir = runtime_dir();
     make_private(&dir);
     dir
 }

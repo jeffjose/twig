@@ -1,0 +1,12 @@
+# Linked statically: a prompt runs twig anew each time, and a static binary
+# skips the dynamic loader (which, with LD_LIBRARY_PATH set, tries dozens of
+# directories for each library before the cache). Measured: 805 µs → 485 µs
+# to run `twig version`.
+#
+# The build target is named so that the flag applies to twig alone, not to
+# the derive macros built for the host.
+[build]
+target = "x86_64-unknown-linux-gnu"
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]

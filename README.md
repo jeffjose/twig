@@ -1,7 +1,8 @@
 # twig
 
 A tcsh prompt that is fast because a daemon does the slow work in the
-background. A prompt takes about 1 ms.
+background. A prompt costs the shell about 0.8 ms per command, and most
+of that is tcsh starting a process at all (see Speed, below).
 
 The prompt: time, machine, address, directory, and git.
 
@@ -97,5 +98,27 @@ twig setup · twig restart · twig remove
 
 `~/.config/twig/config.toml`. Every setting, with what it does, is in
 [config.toml](config.toml). Changes show at the next prompt.
+
+## Speed
+
+What a command costs the shell, measured on an i7-12700K (medians; `twig
+timings` shows the daemon's part above each prompt):
+
+| | per command |
+|---|---|
+| tcsh forking and running a process, at all (`/bin/true`) | 590 µs |
+| postcmd: `history 1 >>! file`, a builtin | 25 µs |
+| precmd: `twig prompt`, start to finish | 745 µs |
+| of which, asking the daemon and getting the prompt back | 130 µs |
+| after a command in a repository: the fresh git status it waits for | +1.6 ms here |
+
+Before each command, tcsh appends the line to a file; after it, `twig prompt`
+reads the file (its birth is when the command started) and asks the daemon
+for the prompt, sending only a hash of the environment unless it changed.
+The daemon answers with what it has, waiting up to `git.wait` for a fresh
+git status after a command in a repository (`git status` itself is most of
+that; `wait = "0"` shows the last one at once and redraws the line when the
+new one comes). The binary is linked statically and skips Rust's own
+start-up, so that it is ready to run 280 µs after being called.
 
 MIT
