@@ -18,6 +18,8 @@ pub enum Request {
     Notify { text: String, level: String, ttl: Option<u64>, shows: Option<u32>, pid: Option<u32>, key: Option<String> },
     Ack { id: Option<u64>, pid: Option<u32> },
     Notices,
+    /// Mute notices that match a pattern, or (undo) stop muting it.
+    Mute { pattern: String, undo: bool },
     JobStart { cmd: String, cwd: String, shell: u32 },
     JobPid { id: u64, pid: u32 },
     JobEnd { id: u64, status: i32 },

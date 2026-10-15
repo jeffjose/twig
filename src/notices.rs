@@ -59,6 +59,21 @@ pub struct Notices {
     file: Option<std::path::PathBuf>,
     /// The last notices to go away, oldest first, for `twig notices`.
     pub past: std::collections::VecDeque<Past>,
+    /// Patterns of notices never to show (`twig notices --ignore`), kept in
+    /// the state directory.
+    pub muted: Vec<String>,
+}
+
+fn muted_file() -> std::path::PathBuf {
+    crate::paths::state_dir().join("ignored.json")
+}
+
+/// Whether a mute pattern matches a text (a notice, or a unit's name). A
+/// pattern with `*` or `?` must match the whole text; one without needs
+/// only to be in it. Case doesn't count.
+pub fn mute_matches(pattern: &str, text: &str) -> bool {
+    let (p, t) = (pattern.to_lowercase(), text.to_lowercase());
+    if p.contains(['*', '?']) { crate::util::glob(&p, &t) } else { t.contains(&p) }
 }
 
 /// How many notices that have gone away are kept.
@@ -81,7 +96,38 @@ impl Notices {
     pub fn load() -> Notices {
         let file = crate::paths::state_dir().join("dismissed.json");
         let acked = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        Notices { acked, file: Some(file), ..Notices::default() }
+        let muted = std::fs::read(muted_file()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        Notices { acked, muted, file: Some(file), ..Notices::default() }
+    }
+
+    /// Whether a text is one of those muted.
+    pub fn is_muted(&self, text: &str) -> bool {
+        self.muted.iter().any(|p| mute_matches(p, text))
+    }
+
+    /// Mute a pattern: what shows now and matches it goes, and what would
+    /// come later doesn't show. Returns how many went.
+    pub fn mute(&mut self, pattern: &str) -> usize {
+        if !self.muted.iter().any(|p| p == pattern) {
+            self.muted.push(pattern.to_string());
+            self.save_muted();
+        }
+        self.retire("ignored", |n| mute_matches(pattern, &n.text))
+    }
+
+    pub fn unmute(&mut self, pattern: &str) -> bool {
+        let before = self.muted.len();
+        self.muted.retain(|p| p != pattern);
+        self.save_muted();
+        before != self.muted.len()
+    }
+
+    fn save_muted(&self) {
+        if self.file.is_some() {
+            if let Ok(b) = serde_json::to_vec(&self.muted) {
+                let _ = crate::util::atomic_write(&muted_file(), &b);
+            }
+        }
     }
 
     fn save_acked(&self) {
@@ -106,6 +152,10 @@ impl Notices {
     /// on screen would change.
     pub fn put(&mut self, n: New) -> bool {
         let now = now_ms();
+        if self.is_muted(&n.text) {
+            // Muted: not shown, and an earlier text under its key goes too.
+            return n.key.is_some_and(|k| self.retire("ignored", |o| o.key.as_deref() == Some(&k)) > 0);
+        }
         if let Some(k) = &n.key {
             if self.acked.get(k).is_some_and(|&l| n.level <= l) {
                 return false;
@@ -263,7 +313,15 @@ fn usage_err(msg: &str) -> i32 {
 
 /// `twig notices`: the notices showing now, and the last ones to go away
 /// (dismissed, expired, or cleared when what they were about was over).
-pub fn list_cmd(_args: &[String]) -> i32 {
+pub fn list_cmd(args: &[String]) -> i32 {
+    match args.first().map(String::as_str) {
+        Some("--ignore" | "--unignore") => return mute_cmd(args),
+        Some(a) => {
+            eprintln!("twig notices: no option {a}\n\nusage: twig notices [--ignore PATTERN|ID] [--unignore PATTERN]");
+            return 2;
+        }
+        None => {}
+    }
     let v = match client::ask(&Request::Notices) {
         Ok(v) => v,
         Err(e) => {
@@ -333,7 +391,64 @@ pub fn list_cmd(_args: &[String]) -> i32 {
             println!("{l}");
         }
     }
+
+    let muted: Vec<String> = v["muted"].as_array().into_iter().flatten().filter_map(|m| m.as_str()).map(String::from).collect();
+    if !muted.is_empty() {
+        println!();
+        for l in crate::boxes::draw("ignored", &muted, Some("twig notices --unignore PATTERN")) {
+            println!("{l}");
+        }
+    }
     0
+}
+
+/// `twig notices --ignore PATTERN|ID`, `twig notices --unignore PATTERN`.
+/// An ID ignores that notice's text.
+fn mute_cmd(args: &[String]) -> i32 {
+    let undo = args[0] == "--unignore";
+    let Some(arg) = args.get(1) else {
+        eprintln!("usage: twig notices --ignore PATTERN|ID   (or --unignore PATTERN)");
+        return 2;
+    };
+    // A notice's id: its text, as it is.
+    let pattern = match arg.parse::<u64>() {
+        Ok(id) if !undo => {
+            let v = match client::ask(&Request::Notices) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("twig: {e}");
+                    return 1;
+                }
+            };
+            match v["notices"].as_array().into_iter().flatten().find(|n| n["id"].as_u64() == Some(id)) {
+                Some(n) => n["text"].as_str().unwrap_or("").to_string(),
+                None => {
+                    eprintln!("twig: no notice {id} now (twig notices)");
+                    return 1;
+                }
+            }
+        }
+        _ => arg.clone(),
+    };
+    match client::ask(&Request::Mute { pattern: pattern.clone(), undo }) {
+        Ok(v) if undo => {
+            if v["unmuted"].as_bool() == Some(true) {
+                println!("no longer ignoring \"{pattern}\"");
+            } else {
+                println!("\"{pattern}\" wasn't ignored (twig notices lists those that are)");
+            }
+            0
+        }
+        Ok(v) => {
+            let gone = v["gone"].as_u64().unwrap_or(0);
+            println!("ignoring notices with \"{pattern}\" from now on ({gone} showing went); twig notices --unignore to undo");
+            0
+        }
+        Err(e) => {
+            eprintln!("twig: {e}");
+            1
+        }
+    }
 }
 
 /// `twig ack [ID]`: dismiss one notice, or all that this shell shows.
@@ -391,6 +506,32 @@ mod tests {
         assert_eq!(n.list.len(), 1);
         assert!(n.clear("disk:/"));
         assert!(n.list.is_empty());
+    }
+
+    #[test]
+    fn muted_notices_go_and_stay_away() {
+        let mut n = Notices::default();
+        n.put(new("backup to basalt failed", None));
+        n.put(new("disk / 94% full", Some("disk:/")));
+        assert_eq!(n.mute("basalt"), 1);
+        assert_eq!(n.list.len(), 1);
+        assert!(!n.put(new("backup to basalt failed again", None)));
+        assert_eq!(n.list.len(), 1);
+        // A keyed notice whose new text is muted goes.
+        n.mute("disk / 9?% full");
+        assert!(n.list.is_empty());
+        assert!(n.unmute("basalt"));
+        assert!(n.put(new("backup to basalt failed", None)));
+        assert_eq!(n.past.iter().filter(|p| p.how == "ignored").count(), 2);
+    }
+
+    #[test]
+    fn mute_patterns() {
+        assert!(mute_matches("rtkit", "failed: rtkit-daemon"));
+        assert!(mute_matches("RTKIT", "rtkit-daemon"));
+        assert!(mute_matches("racc-*", "racc-attest"));
+        assert!(!mute_matches("racc-*", "failed: racc-attest"));
+        assert!(!mute_matches("basalt", "backup to matterhorn"));
     }
 
     #[test]

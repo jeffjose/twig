@@ -136,6 +136,9 @@ pub struct Units {
     /// Say when a systemd unit (system or user) has failed.
     pub enabled: bool,
     pub every: String,
+    /// Units never to mention (names, with or without .service; * and ?
+    /// allowed): ones that fail and are meant to.
+    pub ignore: Vec<String>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -255,7 +258,7 @@ impl Default for Battery {
 
 impl Default for Units {
     fn default() -> Self {
-        Units { enabled: true, every: "1m".into() }
+        Units { enabled: true, every: "1m".into(), ignore: Vec::new() }
     }
 }
 

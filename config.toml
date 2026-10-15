@@ -81,6 +81,7 @@ low = 15           # percent: below it, on battery, a notice says how long is le
 
 [units]
 enabled = true     # say when a systemd unit has failed
+ignore = []        # units that fail and are meant to, e.g. ["rtkit-daemon", "corp-*"]
 
 [history]
 size = 10000

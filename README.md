@@ -81,6 +81,7 @@ twig timings           a box above each prompt; again to stop
 
 twig notify [--warn|--error] [--for 10m] TEXT
 twig notices           now, and the last 50 gone
+twig notices --ignore PATTERN|ID      never show those; --unignore to undo
 twig ack [ID]          dismiss
 
 twig run COMMAND       in the background

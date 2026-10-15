@@ -380,7 +380,22 @@ fn handle(sh: &S, req: Request, t0: Instant) -> Value {
         }
         Request::Notices => {
             let st = sh.lock();
-            json!({ "notices": st.notices.list, "past": st.notices.past })
+            json!({ "notices": st.notices.list, "past": st.notices.past, "muted": st.notices.muted })
+        }
+        Request::Mute { pattern, undo } => {
+            let mut st = sh.lock();
+            let reply = if undo {
+                json!({ "unmuted": st.notices.unmute(&pattern) })
+            } else {
+                json!({ "gone": st.notices.mute(&pattern) })
+            };
+            // The units check runs again now, with the pattern (or without).
+            for slot in st.slots.iter_mut().filter(|s| s.kind == Kind::Units) {
+                slot.next = Instant::now();
+            }
+            drop(st);
+            redraw(sh, |_| true);
+            reply
         }
         Request::JobStart { cmd, cwd, shell } => {
             let mut st = sh.lock();
@@ -858,16 +873,17 @@ fn tick_loop(sh: S) {
 
         // Probes that are due.
         let cfg = st.cfg.clone();
+        let muted = st.notices.muted.clone();
         for i in 0..st.slots.len() {
             let slot = &mut st.slots[i];
             if slot.running || slot.next > Instant::now() {
                 continue;
             }
             slot.running = true;
-            let (kind, name, cfg, sh2) = (slot.kind.clone(), slot.name.clone(), cfg.clone(), sh.clone());
+            let (kind, name, cfg, sh2, muted) = (slot.kind.clone(), slot.name.clone(), cfg.clone(), sh.clone(), muted.clone());
             thread::spawn(move || {
                 let t = Instant::now();
-                let out = probes::run(&kind, &cfg);
+                let out = probes::run(&kind, &cfg, &muted);
                 let took = t.elapsed();
                 let mut st = sh2.lock();
                 st.worked(took);

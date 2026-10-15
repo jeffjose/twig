@@ -63,7 +63,9 @@ pub fn schedule(cfg: &Loaded, fqdn: &str, host: &str) -> Vec<(String, Kind, Dura
     v
 }
 
-pub fn run(kind: &Kind, cfg: &Loaded) -> Outcome {
+/// Run a probe. `muted` is `twig notices --ignore`: failed units it names
+/// are left out one by one, not with the whole notice.
+pub fn run(kind: &Kind, cfg: &Loaded, muted: &[String]) -> Outcome {
     let mut o = Outcome::default();
     match kind {
         Kind::Ip => o.fact("ip", ip()),
@@ -71,7 +73,7 @@ pub fn run(kind: &Kind, cfg: &Loaded) -> Outcome {
         Kind::Disk => disk(cfg, &mut o),
         Kind::Battery => battery(cfg, &mut o),
         Kind::Load => o.fact("load", read_trimmed("/proc/loadavg").and_then(|l| l.split_whitespace().next().map(String::from))),
-        Kind::Units => units(&mut o),
+        Kind::Units => units(&cfg.raw.units.ignore, muted, &mut o),
         Kind::Reboot => {
             let needed = fs::metadata("/var/run/reboot-required").is_ok();
             o.notice("reboot", needed.then(|| (Level::Info, "restart needed for updates".to_string())));
@@ -248,8 +250,8 @@ fn battery(cfg: &Loaded, o: &mut Outcome) {
     o.notice("battery", n);
 }
 
-fn units(o: &mut Outcome) {
-    let mut failed = Vec::new();
+fn units(ignore: &[String], muted: &[String], o: &mut Outcome) {
+    let mut listed = String::new();
     for user in [false, true] {
         let mut c = Command::new("systemctl");
         if user {
@@ -257,15 +259,28 @@ fn units(o: &mut Outcome) {
         }
         c.args(["list-units", "--failed", "--plain", "--no-legend", "--no-pager"]);
         if let Ok(r) = run_with_limit(&mut c, Duration::from_secs(10)) {
-            failed.extend(r.stdout.lines().filter_map(|l| l.split_whitespace().next()).map(|u| u.trim_end_matches(".service").to_string()));
+            listed.push_str(&r.stdout);
         }
     }
+    let mut failed = failed_units(&listed, ignore);
+    failed.retain(|u| !muted.iter().any(|p| crate::notices::mute_matches(p, u)));
     let n = (!failed.is_empty()).then(|| {
         let shown: Vec<&str> = failed.iter().take(3).map(String::as_str).collect();
         let more = if failed.len() > 3 { format!(" +{}", failed.len() - 3) } else { String::new() };
         (Level::Warn, format!("failed: {}{more}", shown.join(", ")))
     });
     o.notice("units", n);
+}
+
+/// The failed units in systemctl's list, without .service, less those
+/// `ignore` names (with or without .service, * and ? allowed).
+fn failed_units(listed: &str, ignore: &[String]) -> Vec<String> {
+    listed
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .filter(|u| !ignore.iter().any(|p| crate::util::glob(p, u) || crate::util::glob(p, u.trim_end_matches(".service"))))
+        .map(|u| u.trim_end_matches(".service").to_string())
+        .collect()
 }
 
 fn custom(p: &Probe, timeout: Duration, o: &mut Outcome) {
@@ -288,6 +303,15 @@ fn custom(p: &Probe, timeout: Duration, o: &mut Outcome) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ignored_units_are_left_out() {
+        let listed = "racc-attest.service loaded failed failed RACC\nrtkit-daemon.service loaded failed failed RealtimeKit\nfoo.timer loaded failed failed Foo\n";
+        assert_eq!(failed_units(listed, &[]), vec!["racc-attest", "rtkit-daemon", "foo.timer"]);
+        let ignore = vec!["racc-attest".to_string(), "rtkit-daemon.service".to_string()];
+        assert_eq!(failed_units(listed, &ignore), vec!["foo.timer"]);
+        assert_eq!(failed_units(listed, &["*".to_string()]), Vec::<String>::new());
+    }
 
     #[test]
     fn sizes() {

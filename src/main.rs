@@ -33,6 +33,7 @@ Notices: messages on the prompt that go away by themselves.
 
   twig notify [--warn|--error] [--for 10m] [--shows N] [--here] TEXT
   twig notices          the ones showing now, and the last ones to go away
+  twig notices --ignore PATTERN|ID   never show those (--unignore to undo)
   twig ack [ID]         dismiss one, or all in this shell
 
 Jobs: commands that run in the background and report on the prompt.
