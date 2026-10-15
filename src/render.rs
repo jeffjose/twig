@@ -24,6 +24,13 @@ pub struct Ctx<'a> {
     /// The notice to show, and how many more there are.
     pub notice: Option<(String, Level, usize)>,
     pub jobs: String,
+    /// The shell came in over ssh.
+    pub ssh: bool,
+}
+
+/// Whether a shell's environment says it came in over ssh.
+pub fn ssh_env(env: &HashMap<String, String>) -> bool {
+    ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"].iter().any(|v| env.get(*v).is_some_and(|x| !x.is_empty()))
 }
 
 impl Vars for Ctx<'_> {
@@ -48,6 +55,7 @@ impl Vars for Ctx<'_> {
             "host" => return Some((self.host.to_string(), self.cfg.host_style(self.fqdn, self.host).unwrap_or_default())),
             "fqdn" => self.fqdn.to_string(),
             "user" => self.env.get("USER").cloned().unwrap_or_default(),
+            "ssh" => return (self.ssh || ssh_env(self.env)).then(|| ("ssh".to_string(), Style::of("pink,bold"))),
             "cwd" => tilde(self.cwd, self.env.get("HOME").map(String::as_str).unwrap_or("")),
             "pwd" => self.cwd.to_string(),
             "dir" => match self.cwd.rsplit('/').next() {

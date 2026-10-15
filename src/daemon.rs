@@ -61,12 +61,16 @@ struct Shell {
     /// so a change that would add or take away a line (a notice on a line
     /// of its own) waits for the next prompt.
     lines: usize,
+    /// sshd is among the shell's parents: it came in over ssh, whatever its
+    /// environment says.
+    ssh: bool,
 }
 
 impl Shell {
     fn new(pid: u32) -> Shell {
         Shell {
             pid,
+            ssh: over_ssh(Path::new("/proc"), pid),
             tty: tty_of(pid),
             cwd: String::new(),
             env: HashMap::new(),
@@ -99,6 +103,25 @@ impl Shell {
         // have wrapped the line).
         tty_columns(tty) == self.cols
     }
+}
+
+/// Whether sshd (or sshd-session, as newer OpenSSH calls the process of
+/// one login) is among a process's parents.
+fn over_ssh(proc: &Path, pid: u32) -> bool {
+    let mut p = pid;
+    for _ in 0..64 {
+        if p <= 1 {
+            return false;
+        }
+        let Ok(stat) = fs::read_to_string(proc.join(format!("{p}/stat"))) else { return false };
+        let (Some(open), Some(close)) = (stat.find('('), stat.rfind(')')) else { return false };
+        if p != pid && stat[open + 1..close].starts_with("sshd") {
+            return true;
+        }
+        let Some(ppid) = stat[close + 2..].split_whitespace().nth(1).and_then(|x| x.parse().ok()) else { return false };
+        p = ppid;
+    }
+    false
 }
 
 /// A shell's terminal, from its controlling tty in /proc (its standard
@@ -540,6 +563,7 @@ fn render_for(st: &State, pid: u32, now: u64) -> Option<(String, String)> {
         git: rs.and_then(|r| r.status.as_ref()),
         notice: st.notices.top(pid, now),
         jobs: jobs_text(&st.jobs, now),
+        ssh: sh.ssh,
     };
     Some(render::render(&ctx, sh.cols))
 }
@@ -1122,4 +1146,30 @@ fn own_use() -> (u64, u64) {
         .and_then(|s| s.lines().find(|l| l.starts_with("VmRSS:"))?.split_whitespace().nth(1)?.parse::<u64>().ok())
         .unwrap_or(0);
     (cpu_ms, rss_kb)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A /proc of processes: (pid, name, parent).
+    fn fake_proc(procs: &[(u32, &str, u32)]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("twig-proc-{}-{}", std::process::id(), procs.len()));
+        for (pid, name, ppid) in procs {
+            fs::create_dir_all(root.join(pid.to_string())).unwrap();
+            fs::write(root.join(format!("{pid}/stat")), format!("{pid} ({name}) S {ppid} {pid} {pid} 0 -1")).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn ssh_among_the_parents() {
+        // sshd → sshd-session → tcsh → screen → tcsh
+        let p = fake_proc(&[(10, "sshd", 1), (20, "sshd-session", 10), (30, "tcsh", 20), (40, "screen", 30), (50, "tcsh", 40)]);
+        assert!(over_ssh(&p, 50));
+        assert!(over_ssh(&p, 30));
+        // A desktop terminal: no sshd.
+        let p = fake_proc(&[(100, "systemd", 1), (110, "xterm", 100), (120, "tcsh", 110)]);
+        assert!(!over_ssh(&p, 120));
+    }
 }

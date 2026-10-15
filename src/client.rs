@@ -180,6 +180,7 @@ fn local_prompt(cwd: &str, status: i32, why: &str) -> (String, String) {
         git: None,
         notice: Some((why.to_string(), crate::notices::Level::Error, 0)),
         jobs: String::new(),
+        ssh: false,
     };
     let (p, r) = render::render(&ctx, None);
     (tcsh::escape(&p), tcsh::escape(&r))

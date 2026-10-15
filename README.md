@@ -7,6 +7,10 @@ The prompt: time, machine, address, directory, and git.
 
 ![The prompt](docs/prompt.png)
 
+Over ssh, the host says so.
+
+![The prompt in an ssh session](docs/ssh.png)
+
 How long a slow command took.
 
 ![A command that took 3 seconds](docs/duration.png)
