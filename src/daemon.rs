@@ -64,6 +64,8 @@ struct Shell {
     /// sshd is among the shell's parents: it came in over ssh, whatever its
     /// environment says.
     ssh: bool,
+    /// The shell runs as root (its effective user).
+    as_root: bool,
 }
 
 impl Shell {
@@ -71,6 +73,7 @@ impl Shell {
         Shell {
             pid,
             ssh: over_ssh(Path::new("/proc"), pid),
+            as_root: euid(Path::new("/proc"), pid) == Some(0),
             tty: tty_of(pid),
             cwd: String::new(),
             env: HashMap::new(),
@@ -103,6 +106,13 @@ impl Shell {
         // have wrapped the line).
         tty_columns(tty) == self.cols
     }
+}
+
+/// A process's effective user, from the Uid line of /proc/PID/status
+/// (real, effective, saved, filesystem).
+fn euid(proc: &Path, pid: u32) -> Option<u32> {
+    let status = fs::read_to_string(proc.join(format!("{pid}/status"))).ok()?;
+    status.lines().find_map(|l| l.strip_prefix("Uid:"))?.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// Whether sshd (or sshd-session, as newer OpenSSH calls the process of
@@ -564,6 +574,7 @@ fn render_for(st: &State, pid: u32, now: u64) -> Option<(String, String)> {
         notice: st.notices.top(pid, now),
         jobs: jobs_text(&st.jobs, now),
         ssh: sh.ssh,
+        root: sh.as_root,
     };
     Some(render::render(&ctx, sh.cols))
 }
@@ -1160,6 +1171,18 @@ mod tests {
             fs::write(root.join(format!("{pid}/stat")), format!("{pid} ({name}) S {ppid} {pid} {pid} 0 -1")).unwrap();
         }
         root
+    }
+
+    #[test]
+    fn root_by_effective_user() {
+        let p = fake_proc(&[(7, "tcsh", 1), (8, "tcsh", 1)]);
+        fs::write(p.join("7/status"), "Name:\ttcsh\nUid:\t1000\t0\t0\t0\n").unwrap();
+        fs::write(p.join("8/status"), "Name:\ttcsh\nUid:\t1000\t1000\t1000\t1000\n").unwrap();
+        assert_eq!(euid(&p, 7), Some(0));
+        assert_eq!(euid(&p, 8), Some(1000));
+        assert_eq!(euid(&p, 9), None);
+        // This test's own shell, as the daemon would see it.
+        assert_eq!(euid(Path::new("/proc"), std::process::id()), Some(unsafe { libc::geteuid() }));
     }
 
     #[test]

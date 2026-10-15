@@ -26,6 +26,8 @@ pub struct Ctx<'a> {
     pub jobs: String,
     /// The shell came in over ssh.
     pub ssh: bool,
+    /// The shell runs as root.
+    pub root: bool,
 }
 
 /// Whether a shell's environment says it came in over ssh.
@@ -56,6 +58,7 @@ impl Vars for Ctx<'_> {
             "fqdn" => self.fqdn.to_string(),
             "user" => self.env.get("USER").cloned().unwrap_or_default(),
             "ssh" => return (self.ssh || ssh_env(self.env)).then(|| ("ssh".to_string(), Style::of("pink,bold"))),
+            "root" => return self.root.then(|| ("root".to_string(), Style::of("red,bold"))),
             "cwd" => tilde(self.cwd, self.env.get("HOME").map(String::as_str).unwrap_or("")),
             "pwd" => self.cwd.to_string(),
             "dir" => match self.cwd.rsplit('/').next() {

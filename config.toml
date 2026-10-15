@@ -10,6 +10,7 @@
 # Variables:
 #   time host fqdn user ip cwd (with ~) pwd (in full) dir symbol status duration
 #   ssh ("ssh" when the shell came in over ssh: [ ({ssh})] after {host})
+#   root ("root" when the shell runs as root)
 #   git (all of the status below, together)
 #   git_branch git_ahead git_behind git_staged git_changed git_untracked
 #   git_stash git_conflicts git_clean git_dirty git_state

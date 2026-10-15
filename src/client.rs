@@ -181,6 +181,8 @@ fn local_prompt(cwd: &str, status: i32, why: &str) -> (String, String) {
         notice: Some((why.to_string(), crate::notices::Level::Error, 0)),
         jobs: String::new(),
         ssh: false,
+        // Without the daemon: twig runs as the shell's user.
+        root: unsafe { libc::geteuid() } == 0,
     };
     let (p, r) = render::render(&ctx, None);
     (tcsh::escape(&p), tcsh::escape(&r))
