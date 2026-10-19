@@ -11,10 +11,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std", "preserve_order"] }
 
+# No cross-crate LTO and 16 codegen units, Cargo's own default: a rebuild
+# takes 2.7 s rather than 17 s (fat LTO with one unit, a single core for
+# all of it), and the binary is 250 KB larger. Measured 2026-10-19 on a
+# loaded machine: `twig version` came out 0-40 µs slower (median ~350 µs),
+# prompt and history within noise. Put `lto = "fat"` and
+# `codegen-units = 1` back if a prompt ever needs those microseconds.
 [profile.release]
 opt-level = 3
-lto = "fat"
-codegen-units = 1
 # A prompt is a new process every time: the less there is to load, the
 # sooner it runs. The binary is linked statically too (.cargo/config.toml).
 panic = "abort"
