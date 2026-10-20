@@ -63,6 +63,17 @@ What the shell runs (set up by twig init tcsh):
   twig daemon           the daemon itself, in the foreground
 ";
 
+/// The version and the commit it was built from: `0.1.0-abc1234`, with
+/// `-dirty` if the tree had changes not committed.
+fn version() -> String {
+    // Unset where git could not be asked, or vergen's stand-in.
+    let Some(sha) = option_env!("VERGEN_GIT_SHA").filter(|sha| !sha.is_empty() && !sha.contains("VERGEN")) else {
+        return env!("CARGO_PKG_VERSION").to_string();
+    };
+    let dirty = if option_env!("VERGEN_GIT_DIRTY") == Some("true") { "-dirty" } else { "" };
+    format!("{}-{sha}{dirty}", env!("CARGO_PKG_VERSION"))
+}
+
 #[cfg_attr(not(test), no_mangle)]
 pub extern "C" fn main(_argc: libc::c_int, _argv: *const *const libc::c_char) -> libc::c_int {
     let mut args = std::env::args().skip(1);
@@ -103,7 +114,7 @@ pub extern "C" fn main(_argc: libc::c_int, _argv: *const *const libc::c_char) ->
             0
         }
         "version" | "-V" | "--version" => {
-            println!("twig {}", env!("CARGO_PKG_VERSION"));
+            println!("twig {}", version());
             0
         }
         other => {
