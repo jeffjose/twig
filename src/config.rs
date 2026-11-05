@@ -173,6 +173,10 @@ pub struct Probe {
     /// Only on these machines (patterns); every machine when empty.
     #[serde(default)]
     pub hosts: Vec<String>,
+    /// A command for sh -c that says whether the probe applies here: while
+    /// it fails, `run` is not run, {name} is empty and there is no notice.
+    #[serde(default)]
+    pub when: Option<String>,
     /// A notice to show while the command fails; {value} is its output.
     #[serde(default)]
     pub notice: Option<String>,

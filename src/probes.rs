@@ -285,6 +285,15 @@ fn failed_units(listed: &str, ignore: &[String]) -> Vec<String> {
 
 fn custom(p: &Probe, timeout: Duration, o: &mut Outcome) {
     let key = format!("probe:{}", p.name);
+    if let Some(when) = &p.when {
+        let met = matches!(run_with_limit(Command::new("sh").arg("-c").arg(when), timeout),
+            Ok(r) if !r.timed_out && r.status == Some(0));
+        if !met {
+            o.fact(&p.name, None);
+            o.notice(&key, None);
+            return;
+        }
+    }
     let ran = run_with_limit(Command::new("sh").arg("-c").arg(&p.run), timeout);
     let (ok, value) = match ran {
         Ok(r) if !r.timed_out => (r.status == Some(0), r.stdout.lines().next().map(crate::util::clean)),
@@ -378,6 +387,7 @@ mod tests {
             run: run.into(),
             every: "1m".into(),
             hosts: vec![],
+            when: None,
             notice: Some("broken: {value}".into()),
             level: "error".into(),
             timeout: "5s".into(),
@@ -394,5 +404,13 @@ mod tests {
         let mut o = Outcome::default();
         custom(&p("sleep 5"), Duration::from_millis(100), &mut o);
         assert!(o.notices[0].1.as_ref().unwrap().text.contains("timed out"));
+        let gated = |when: &str| Probe { when: Some(when.into()), ..p("echo nope; exit 3") };
+        let mut o = Outcome::default();
+        custom(&gated("false"), Duration::from_secs(5), &mut o);
+        assert_eq!(o.facts[0].1, None);
+        assert!(o.notices[0].1.is_none());
+        let mut o = Outcome::default();
+        custom(&gated("true"), Duration::from_secs(5), &mut o);
+        assert!(o.notices[0].1.is_some());
     }
 }

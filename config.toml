@@ -92,7 +92,9 @@ key = "^R"         # opens the history search
 desktop_after = "30s"
 
 # A probe runs a command now and then. Its first line of output is the
-# variable {name}; `notice` is shown while the command fails.
+# variable {name}; `notice` is shown while the command fails. `hosts` limits
+# it to some machines by name; `when` is a command that must succeed for it to
+# run at all (while it fails, nothing shows), for what can't be told by name.
 #
 # [[probe]]
 # name = "vpn"
@@ -106,3 +108,9 @@ desktop_after = "30s"
 # hosts = ["work*"]
 # notice = "certificate expired: run renew"
 # level = "error"
+#
+# [[probe]]
+# name = "docker"
+# run = "docker info >/dev/null 2>&1"
+# when = "command -v docker"
+# notice = "docker is not running"
